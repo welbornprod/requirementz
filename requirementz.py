@@ -8,6 +8,8 @@
     add requirement lines (without clobbering existing comments/whitespace),
     and list formatted requirements.
 
+    Originally designed for Python3, but backporting was fairly easy
+    (it cost some readability though). This should run on at least Python 2.7.
     -Christopher Welborn 07-19-2015
 """
 
@@ -31,7 +33,7 @@ SCRIPT = os.path.split(os.path.abspath(sys.argv[0]))[1]
 
 USAGESTR = """{versionstr}
     Usage:
-        {script} -h | -v
+        {script} -h | -p | -v
         {script} [-c | -d | -l | -a line | (-s pat [-i])] [FILE]
 
     Options:
@@ -43,23 +45,27 @@ USAGESTR = """{versionstr}
         -h,--help            : Show this help message.
         -i,--ignorecase      : Case insensitive when searching.
         -l,--list            : List all requirements.
+        -p,--packages        : List all installed packages.
         -s pat,--search pat  : Search requirements for text/regex pattern.
         -v,--version         : Show version.
 
     The default action is to check requirements against installed packages.
     This must be ran with the same interpreter the target `pip` uses,
-    which is `pip{major_ver}` by default.
+    which is `pip{py_ver.major}` by default.
+
+    Currently using pip v. {pip_ver} for Python {py_ver.major}.{py_ver.minor}.
 """.format(
     script=SCRIPT,
     versionstr=VERSIONSTR,
-    major_ver=sys.version_info.major
+    pip_ver=pip.__version__,
+    py_ver=sys.version_info
 )
 
 try:
     # Map from package name to pip package.
     PKGS = {
         p.project_name.lower(): p
-        for p in pip.get_installed_distributions()
+        for p in pip.get_installed_distributions(local_only=False)
     }
 except Exception as ex:
     print('\nUnable to retrieve packages with pip: {}'.format(ex))
@@ -88,12 +94,17 @@ def main(argd):
         return list_duplicates(filename)
     elif argd['--list']:
         return list_requirements(filename)
+    elif argd['--packages']:
+        return list_packages()
     elif argd['--search']:
         return search_requirements(
             argd['--search'],
             filename=filename,
             nocase=argd['--ignorecase'])
-
+    elif argd['--check']:
+        # Explicit check.
+        return check_requirements(filename)
+    # Default action, check.
     return check_requirements(filename)
 
 
@@ -277,8 +288,18 @@ def iter_requirements(filename='requirements.txt', sort=True):
                 for r in reqgen:
                     yield r
     except EnvironmentError as ex:
-        print(
-            '\nUnable to read requirements file: {}\n{}'.format(filename, ex))
+        errmsgs = {
+            # Py2 does not have FileNotFoundError.
+            2: 'Requirements file not found: {}'.format(filename),
+            # PermissionsError.
+            13: 'Invalid permissions for file: {}'.format(filename),
+            # Other EnvironmentError.
+            None: 'Error reading requirements file: {}\n{}'.format(
+                filename,
+                ex)
+        }
+        print('\n{}'.format(errmsgs.get(getattr(ex, 'errno', None))))
+        sys.exit(1)
     return
 
 
@@ -331,6 +352,16 @@ def list_duplicates(filename='requirements.txt'):
         pluralentry,
         pluraltotal))
     return dupetotal
+
+
+def list_packages():
+    """ List all installed packages. """
+    for pname in sorted(PKGS):
+        p = PKGS[pname]
+        print('{:<30} v. {:<8} {}'.format(
+            p.project_name,
+            installed_version(pname),
+            p.location))
 
 
 def list_requirements(filename='requirements.txt'):
