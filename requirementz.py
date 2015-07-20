@@ -47,7 +47,13 @@ USAGESTR = """{versionstr}
         -v,--version         : Show version.
 
     The default action is to check requirements against installed packages.
-""".format(script=SCRIPT, versionstr=VERSIONSTR)
+    This must be ran with the same interpreter the target `pip` uses,
+    which is `pip{major_ver}` by default.
+""".format(
+    script=SCRIPT,
+    versionstr=VERSIONSTR,
+    major_ver=sys.version_info.major
+)
 
 try:
     # Map from package name to pip package.
@@ -139,24 +145,30 @@ def check_requirement(name, op, ver):
         Returns 1 if the requirement is not satisfied, or 0 on success.
     """
     installver = installed_version(name)
-    err = 0
-    msg = 'installed' if ver == '0' else '{} {}'.format(op, ver)
+    requiredver = 'installed' if ver == '0' else '{} {}'.format(op, ver)
     if installver is None:
         errstatus = '!'
         err = 1
     else:
-        if compare_versions(installver, op, ver):
-            errstatus = ' '
-        else:
+        err = 0
+        if installver is None:
             errstatus = '!'
             err = 1
-    statfmt = '{state:<5} {name:<30} v. {verstr:<12} {errstatus} {msg}'
+        else:
+            if compare_versions(installver, op, ver):
+                errstatus = ' '
+            else:
+                errstatus = '!'
+                err = 1
+
+    statfmt = '{state:<5} {name:<30} {installed:<13} {err} {required}'
+    installstr = 'v. {}'.format(installver) if installver else 'not installed'
     print(statfmt.format(
         state='Error' if errstatus == '!' else 'Ok',
         name=name,
-        verstr=installver,
-        errstatus=errstatus,
-        msg=msg))
+        installed=installstr,
+        err=errstatus,
+        required=requiredver))
     return err
 
 
@@ -170,9 +182,6 @@ def check_requirements(filename='requirements.txt'):
         for pkgname, op, installver in iter_specs(filename):
             errors += check_requirement(pkgname, op, installver)
             checked += 1
-    except FileNotFoundError:
-        print('\nRequirements file not found: {}'.format(filename))
-        return 1
     except Exception as ex:
         print('\nError checking requirements in {}\n  {}'.format(
             filename,
@@ -242,7 +251,18 @@ def installed_version(pkgname):
     p = PKGS.get(pkgname.lower(), None)
     if p is None:
         return None
-    return p.parsed_version.base_version
+    try:
+        return p.parsed_version.base_version
+    except AttributeError:
+        # Python 2...
+        vers = []
+        for piece in p.parsed_version:
+            try:
+                vers.append(str(int(piece)))
+            except ValueError:
+                # final, beta, etc.
+                pass
+        return '.'.join(vers)
 
 
 def iter_requirements(filename='requirements.txt', sort=True):
@@ -251,9 +271,11 @@ def iter_requirements(filename='requirements.txt', sort=True):
         with open(filename, 'r') as f:
             reqgen = requirements.parse(f)
             if sort:
-                yield from sorted(reqgen, key=lambda r: r.name)
+                for r in sorted(reqgen, key=lambda r: r.name):
+                    yield r
             else:
-                yield from reqgen
+                for r in reqgen:
+                    yield r
     except EnvironmentError as ex:
         print(
             '\nUnable to read requirements file: {}\n{}'.format(filename, ex))
