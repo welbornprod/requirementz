@@ -4,9 +4,11 @@
 """ requirementz.py
     Check requirements.txt against installed packages using pip and
     requirements-parser.
+    Bonus features:
     Check for duplicate entries, search for entries using regex,
     add requirement lines (without clobbering existing comments/whitespace),
-    and list formatted requirements.
+    and list requirements or all installed packages (both formatted
+    for readability).
 
     Originally designed for Python3, but backporting was fairly easy
     (it cost some readability though). This should run on at least Python 2.7.
@@ -27,14 +29,15 @@ from docopt import docopt
 from requirements.requirement import Requirement
 
 NAME = 'Requirementz'
-VERSION = '0.0.1'
+VERSION = '0.0.2'
 VERSIONSTR = '{} v. {}'.format(NAME, VERSION)
 SCRIPT = os.path.split(os.path.abspath(sys.argv[0]))[1]
 
 USAGESTR = """{versionstr}
     Usage:
         {script} -h | -p | -v
-        {script} [-c | -d | -l | -a line | (-s pat [-i])] [FILE]
+        {script} [-c] [-e] [-r] [FILE]
+        {script} [-d | -l | -a line | (-s pat [-i])] [FILE]
 
     Options:
         FILE                 : Requirements file to parse.
@@ -42,10 +45,14 @@ USAGESTR = """{versionstr}
         -a line,--add line   : Add a requirement line to the file.
         -c,--check           : Check installed packages against requirements.
         -d,--duplicates      : List any duplicate entries.
+        -e,--errors          : Only show errored packages with -c.
         -h,--help            : Show this help message.
         -i,--ignorecase      : Case insensitive when searching.
         -l,--list            : List all requirements.
         -p,--packages        : List all installed packages.
+        -r,--requirement     : Print name and version requirement only with -c.
+                               Useful for use with -e, to get a list of
+                               packages to install or upgrade.
         -s pat,--search pat  : Search requirements for text/regex pattern.
         -v,--version         : Show version.
 
@@ -103,9 +110,15 @@ def main(argd):
             nocase=argd['--ignorecase'])
     elif argd['--check']:
         # Explicit check.
-        return check_requirements(filename)
+        return check_requirements(
+            filename,
+            errors_only=argd['--errors'],
+            spec_only=argd['--requirement'])
     # Default action, check.
-    return check_requirements(filename)
+    return check_requirements(
+        filename,
+        errors_only=argd['--errors'],
+        spec_only=argd['--requirement'])
 
 
 def add_line(filename, line):
@@ -147,43 +160,55 @@ def add_line(filename, line):
     return 0
 
 
-def check_requirement(name, op, ver):
+def check_requirement(name, op, ver, errors_only=False, spec_only=False):
     """ Check a single requirement, and print it's status.
         Arguments:
-            name : Package name to check.
-            op   : Comparison operator for required version. ('==', '>=', ..)
-            ver  : Required version string.
+            name         : Package name to check.
+            op           : Comparison operator for required version.
+                           Example: '==', or '>=', or '<', ..
+            ver          : Required version string.
+            errors_only  : Whether to only print errored packages.
+            spec_only    : Whether to print only names and required version.
+                           Useful in combination with errors_only.
         Returns 1 if the requirement is not satisfied, or 0 on success.
     """
     installver = installed_version(name)
     requiredver = 'installed' if ver == '0' else '{} {}'.format(op, ver)
     if installver is None:
         errstatus = '!'
-        err = 1
+        err = True
     else:
-        err = 0
+        err = False
         if installver is None:
             errstatus = '!'
-            err = 1
+            err = True
         else:
             if compare_versions(installver, op, ver):
                 errstatus = ' '
             else:
                 errstatus = '!'
-                err = 1
-
+                err = True
+    if errors_only and not err:
+        return 0
+    elif spec_only:
+        # Print package and required version.
+        # Makes it easy to write a script to install/upgrade packages.
+        print('{} {} {}'.format(name, op, ver))
+        return int(err)
+    # Full format.
     statfmt = '{state:<5} {name:<30} {installed:<13} {err} {required}'
     installstr = 'v. {}'.format(installver) if installver else 'not installed'
     print(statfmt.format(
-        state='Error' if errstatus == '!' else 'Ok',
+        state='Error' if err else 'Ok',
         name=name,
         installed=installstr,
         err=errstatus,
         required=requiredver))
-    return err
+    return int(err)
 
 
-def check_requirements(filename='requirements.txt'):
+def check_requirements(
+        filename='requirements.txt', errors_only=False, spec_only=False):
     """ Check a requirements file, print package/requirements info.
         Returns an exit code (0 for success, non-zero for errors)
     """
@@ -191,7 +216,12 @@ def check_requirements(filename='requirements.txt'):
     errors = 0
     try:
         for pkgname, op, installver in iter_specs(filename):
-            errors += check_requirement(pkgname, op, installver)
+            errors += check_requirement(
+                pkgname,
+                op,
+                installver,
+                errors_only=errors_only,
+                spec_only=spec_only)
             checked += 1
     except Exception as ex:
         print('\nError checking requirements in {}\n  {}'.format(
