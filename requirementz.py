@@ -7,8 +7,11 @@
     Check for duplicate entries, search for entries using regex,
     add requirement lines (without clobbering existing comments/whitespace),
     and list formatted requirements.
+
     -Christopher Welborn 07-19-2015
 """
+
+# TODO: Figure out what to do with cvs or local requirements. -Cj
 
 from __future__ import print_function
 import os
@@ -55,6 +58,15 @@ try:
 except Exception as ex:
     print('\nUnable to retrieve packages with pip: {}'.format(ex))
     sys.exit(1)
+
+# Map from comparison operator to actual function.
+OP_FUNCS = {
+    '==': lambda v1, v2: parse_version(v1) == parse_version(v2),
+    '>=': lambda v1, v2: parse_version(v1) >= parse_version(v2),
+    '<=': lambda v1, v2: parse_version(v1) <= parse_version(v2),
+    '>': lambda v1, v2: parse_version(v1) > parse_version(v2),
+    '<': lambda v1, v2: parse_version(v1) < parse_version(v2)
+}
 
 
 def main(argd):
@@ -188,15 +200,8 @@ def compare_versions(ver1, op, ver2):
             compare_versions('2.0.0' '<=', '1.0.0')
             >> False
     """
-    opfunc = {
-        '==': lambda v1, v2: v1 == v2,
-        '>=': lambda v1, v2: v1 >= v2,
-        '<=': lambda v1, v2: v1 <= v2,
-        '>': lambda v1, v2: v1 > v2,
-        '<': lambda v1, v2: v1 < v2
-    }.get(op, lambda v1, v2: v1 > v2)
-
-    return opfunc(parse_version(ver1), parse_version(ver2))
+    opfunc = OP_FUNCS.get(op, OP_FUNCS['>='])
+    return opfunc(ver1, ver2)
 
 
 def exists_or_create(filename):
