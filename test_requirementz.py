@@ -27,6 +27,9 @@ class RequirementzTests(unittest.TestCase):
         self.assertTrue(compare_versions('1.0.0', '==', '1.0.0'))
         self.assertTrue(compare_versions('1', '==', '1.0.0'))
         self.assertTrue(compare_versions('0.1', '==', '0.1.0'))
+        # Unknown comparison operators default to '>='
+        self.assertTrue(compare_versions('2', 'WAT', '1'))
+        self.assertTrue(compare_versions('1', None, '1'))
 
 if __name__ == '__main__':
     sys.exit(unittest.main(argv=sys.argv))
