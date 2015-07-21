@@ -184,7 +184,7 @@ def check_requirement(name, op, ver, errors_only=False, spec_only=False):
             err = True
         else:
             if compare_versions(installver, op, ver):
-                errstatus = ' '
+                errstatus = ' ' if ver == installver else '-'
             else:
                 errstatus = '!'
                 err = True
