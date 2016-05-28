@@ -18,41 +18,48 @@
 # TODO: Figure out what to do with cvs or local requirements. -Cj
 
 from __future__ import print_function
+import inspect
 import os
 import pip
 import re
+import shutil
 import sys
+from contextlib import suppress
 from pkg_resources import parse_version
 
 import requirements
+from colr import (auto_disable as colr_auto_disable, Colr as C)
 from docopt import docopt
 from requirements.requirement import Requirement
 
 NAME = 'Requirementz'
-VERSION = '0.0.2'
+VERSION = '0.0.3'
 VERSIONSTR = '{} v. {}'.format(NAME, VERSION)
 SCRIPT = os.path.split(os.path.abspath(sys.argv[0]))[1]
 
 USAGESTR = """{versionstr}
     Usage:
-        {script} -h | -p | -v
-        {script} [-c] [-e] [-r] [FILE]
-        {script} [-d | -l | -a line | (-s pat [-i])] [FILE]
+        {script} (-h | -p | -v) [-D]
+        {script} [-c] [-e] [-r] [FILE] [-D]
+        {script} [-d | -l | -a line | (-s pat [-i])] [FILE] [-D]
+        {script} -S [FILE] [-D]
 
     Options:
         FILE                 : Requirements file to parse.
                                Default: requirements.txt
         -a line,--add line   : Add a requirement line to the file.
         -c,--check           : Check installed packages against requirements.
+        -D,--debug           : Print some debug info while running.
         -d,--duplicates      : List any duplicate entries.
         -e,--errors          : Only show errored packages with -c.
         -h,--help            : Show this help message.
         -i,--ignorecase      : Case insensitive when searching.
         -l,--list            : List all requirements.
         -p,--packages        : List all installed packages.
-        -r,--requirement     : Print name and version requirement only with -c.
+        -r,--requirement     : Print name and version requirement only for -c.
                                Useful for use with -e, to get a list of
                                packages to install or upgrade.
+        -S,--sort            : Sort the requirements file by package name.
         -s pat,--search pat  : Search requirements for text/regex pattern.
         -v,--version         : Show version.
 
@@ -87,9 +94,24 @@ OP_FUNCS = {
     '<': lambda v1, v2: parse_version(v1) < parse_version(v2)
 }
 
+# Known EnvironmentError errno's, for better error messages.
+FILE_ERRS = {
+    # Py2 does not have FileNotFoundError.
+    2: 'Requirements file not found: {filename}',
+    # PermissionsError.
+    13: 'Invalid permissions for file: {filename}',
+    # Other EnvironmentError.
+    None: '{msg}: {filename}\n{exc}'
+}
+
+DEBUG = False
+
 
 def main(argd):
     """ Main entry point, expects doctopt arg dict as argd. """
+    global DEBUG
+    DEBUG = argd['--debug']
+
     filename = argd['FILE'] or os.path.join(os.getcwd(), 'requirements.txt')
 
     # May opt-in to create a file that doesn't exist.
@@ -114,6 +136,11 @@ def main(argd):
             filename,
             errors_only=argd['--errors'],
             spec_only=argd['--requirement'])
+    elif argd['--sort']:
+        sort_requirements(filename)
+        print('Sorted requirements file: {}'.format(filename))
+        return 0
+
     # Default action, check.
     return check_requirements(
         filename,
@@ -135,28 +162,40 @@ def add_line(filename, line):
     if not exists_or_create(filename):
         return 1
 
-    reqname = req.name.lower()
-
+    reqs = []
+    replaced = False
     for existingname, op, requiredver in iter_specs(filename):
-        if existingname == reqname:
-            print('\n'.join((
-                '\nThis requirement already exists!: {} {} {}',
-                'Edit the file to change the specification.'
-            )).format(
-                existingname,
-                op,
-                requiredver)
-            )
-            return 1
+        existingreq = Requirement.parse_line(
+            ' '.join((existingname, op, requiredver))
+        )
+        if existingname == req.name:
+            debug('Found existing requirement: {}'.format(existingname))
+            if requirement_eq(req, existingreq):
+                file_backup_remove(filename)
+                raise FatalError(
+                    'Already a requirement: {}'.format(existingreq.line))
+            debug('...versions are different.')
+            # Replace old requirement.
+            print('Replacing requirement: {} -> {}'.format(
+                existingreq.line,
+                req.line
+            ))
+            reqs.append(req)
+            replaced = True
+        else:
+            # Write existing requirement.
+            reqs.append(existingreq)
 
-    try:
-        with open(filename, 'a') as f:
-            f.write('{}\n'.format(req.line))
-    except EnvironmentError as ex:
-        print('\nFailed to write requirements: {}\n{}'.format(filename, ex))
-        return 1
+    if not replaced:
+        # Add a new requirement.
+        print('Adding requirement: {}'.format(req.line))
+        reqs.append(req)
 
-    print('Added requirement: {}'.format(req.line))
+    write_requirements(
+        sorted(reqs, key=lambda r: r.name),
+        filename=filename
+    )
+
     return 0
 
 
@@ -254,6 +293,44 @@ def compare_versions(ver1, op, ver2):
     return opfunc(ver1, ver2)
 
 
+def debug(*args, **kwargs):
+    """ Print a message only if DEBUG is truthy. """
+    if not (DEBUG and args):
+        return None
+
+    # Include parent class name when given.
+    parent = kwargs.get('parent', None)
+    with suppress(KeyError):
+        kwargs.pop('parent')
+
+    # Go back more than once when given.
+    backlevel = kwargs.get('back', 1)
+    with suppress(KeyError):
+        kwargs.pop('back')
+
+    frame = inspect.currentframe()
+    # Go back a number of frames (usually 1).
+    while backlevel > 0:
+        frame = frame.f_back
+        backlevel -= 1
+    fname = os.path.split(frame.f_code.co_filename)[-1]
+    lineno = frame.f_lineno
+    if parent:
+        func = '{}.{}'.format(parent.__class__.__name__, frame.f_code.co_name)
+    else:
+        func = frame.f_code.co_name
+
+    lineinfo = '{}:{} {}: '.format(
+        C(fname, 'yellow'),
+        C(str(lineno).ljust(4), 'blue'),
+        C().join(C(func, 'magenta'), '()').ljust(20)
+    )
+    # Patch args to stay compatible with print().
+    pargs = list(C(a, 'green').str() for a in args)
+    pargs[0] = ''.join((lineinfo, pargs[0]))
+    print(*pargs, **kwargs)
+
+
 def exists_or_create(filename):
     """ Confirm that a requirements.txt exists, create one if the USAGESTR
         wants to. If none exists, and the user does not want to create one,
@@ -261,6 +338,7 @@ def exists_or_create(filename):
         Returns True on success.
     """
     if os.path.isfile(filename):
+        debug('File exists: {}'.format(filename))
         return True
 
     print('\nThis file doesn\'t exist yet: {}'.format(filename))
@@ -272,10 +350,41 @@ def exists_or_create(filename):
     try:
         with open(filename, 'w'):
             pass
+        debug('Created an empty {}'.format(filename))
     except EnvironmentError as ex:
         print('\nError creating file: {}\n{}'.format(filename, ex))
         return False
     return True
+
+
+def file_backup(filename):
+    """ Create a backup copy, in case something fails. """
+    backupfile = '{}.bak'.format(filename)
+    debug('Creating backup file: {}'.format(backupfile))
+    try:
+        shutil.copy2(filename, backupfile)
+    except EnvironmentError as ex:
+        handle_env_err(filename, ex, msg='Failed to backup')
+    return None
+
+
+def file_backup_remove(originalfile):
+    """ Remove a backup file, after everything else is done. """
+    backupfile = '{}.bak'.format(originalfile)
+    if not os.path.exists(backupfile):
+        debug('Backup file does not exist: {}'.format(backupfile))
+        return None
+
+    debug('Removing backup file: {}'.format(backupfile))
+    try:
+        os.remove(backupfile)
+    except EnvironmentError as ex:
+        handle_env_err(
+            backupfile,
+            ex,
+            msg='Failed to remove backup file'
+        )
+    return None
 
 
 def format_requirement(r):
@@ -283,6 +392,19 @@ def format_requirement(r):
     vers = ', '.join('{:<2} {}'.format(s[0], s[1]) for s in r.specs)
     extras = '[{}]'.format(', '.join(r.extras)) if r.extras else ''
     return '{:<30} {:<30} {}'.format(r.name, vers, extras)
+
+
+def handle_env_err(filename, exc, msg=None):
+    """ Handles EnvironmentError by formatting a custom message and raising
+        FatalError.
+    """
+    raise FatalError('\n{}'.format(
+        FILE_ERRS.get(getattr(ex, 'errno', None)).format(
+            filename=filename,
+            exc=ex,
+            msg=msg or 'Error with file'
+        )
+    ))
 
 
 def installed_version(pkgname):
@@ -318,18 +440,7 @@ def iter_requirements(filename='requirements.txt', sort=True):
                 for r in reqgen:
                     yield r
     except EnvironmentError as ex:
-        errmsgs = {
-            # Py2 does not have FileNotFoundError.
-            2: 'Requirements file not found: {}'.format(filename),
-            # PermissionsError.
-            13: 'Invalid permissions for file: {}'.format(filename),
-            # Other EnvironmentError.
-            None: 'Error reading requirements file: {}\n{}'.format(
-                filename,
-                ex)
-        }
-        print('\n{}'.format(errmsgs.get(getattr(ex, 'errno', None))))
-        sys.exit(1)
+        handle_env_err(filename, ex, msg='Error reading file')
     return
 
 
@@ -344,11 +455,11 @@ def iter_search(pattern, filename='requirements.txt', nocase=True):
             yield r.line
 
 
-def iter_specs(filename='requirements.txt'):
+def iter_specs(filename='requirements.txt', sort=True):
     """ Iterate over requirements from a requirements file.
         Yields tuples of: (package_name, comparison_operator, version_string)
     """
-    for r in iter_requirements(filename=filename):
+    for r in iter_requirements(filename=filename, sort=sort):
         if r.specs:
             for op, ver in r.specs:
                 yield r.name, op, ver
@@ -400,6 +511,42 @@ def list_requirements(filename='requirements.txt'):
         print(format_requirement(r))
 
 
+def print_err(*args, **kwargs):
+    """ Print a message to stderr by default. """
+    if kwargs.get('file', None) is None:
+        kwargs['file'] = sys.stderr
+    print(C(kwargs.get('sep', ' ').join(args), 'red'), **kwargs)
+
+
+def requirement_eq(req1, req2):
+    """ Returns True if req1 is a subset of req2. """
+    if req1.name != req2.name:
+        return False
+    for opver in req1.specs:
+        if opver in req2.specs:
+            return True
+    return False
+
+
+def requirement_line(r):
+    """ Convert a parsed Requirement back into a string. """
+    pcs = []
+    if r.editable:
+        pcs.append('-e')
+    if r.local_file:
+        pcs.append(r.path)
+        return ' '.join(pcs)
+    elif r.vcs:
+        hashstr = '#egg={}'.format(r.name)
+        url = '@'.join((r.uri, r.revision))
+        pcs.append(''.join((url, hashstr)))
+        return ' '.join(pcs)
+    # Normal pip package.
+    extras = '[{}]'.format(', '.join(r.extras)) if r.extras else ''
+    vers = ','.join('{} {}'.format(op, ver) for op, ver in r.specs)
+    return '{}{} {}'.format(r.name, extras, vers)
+
+
 def search_requirements(pattern, filename='requirements.txt', nocase=True):
     """ Search requirements lines for a text/regex pattern, and print
         results as they are found.
@@ -419,6 +566,63 @@ def search_requirements(pattern, filename='requirements.txt', nocase=True):
         'entry' if found == 1 else 'entries'))
     return 0 if found > 0 else 1
 
+
+def sort_requirements(filename='requirements.txt'):
+    """ Sort a requirements file, and re-write it. """
+    # Exhaust this generator so the file is closed before writing.
+    write_requirements(
+        list(iter_requirements(filename=filename, sort=True)),
+        filename=filename
+    )
+    return 0
+
+
+def write_requirements(reqs, filename='requirements.txt'):
+    """ Write a list of Requirements to file. """
+    try:
+        debug('Writing sorted file: {}'.format(filename))
+        with SafeWriter(filename, 'w') as f:
+            f.write('\n'.join(requirement_line(r) for r in reqs))
+            f.write('\n')
+    except EnvironmentError as ex:
+        handle_env_err(filename, ex, msg='Failed to write requirements')
+    return None
+
+
+class FatalError(EnvironmentError):
+    def __init__(self, msg):
+        self.msg = msg
+
+    def __str__(self):
+        return self.msg
+
+
+class SafeWriter(object):
+    def __init__(self, filename, mode='w'):
+        self.filename = filename
+        self.mode = mode
+        self.f = None
+
+    def __enter__(self):
+        file_backup(self.filename)
+        debug(
+            'Opening file for mode \'{s.mode}\': {s.filename}'.format(s=self))
+        self.f = open(self.filename, mode=self.mode)
+        return self.f
+
+    def __exit__(self, extype, val, tb):
+        self.f.close()
+        if extype is None:
+            # No error occurred, safe to remove backup.
+            file_backup_remove(self.filename)
+        else:
+            print_err('A backup file was saved.')
+
+
 if __name__ == '__main__':
-    mainret = main(docopt(USAGESTR, version=VERSIONSTR))
+    try:
+        mainret = main(docopt(USAGESTR, version=VERSIONSTR))
+    except FatalError as ex:
+        print_err('\n{}\n'.format(ex))
+        mainret = 1
     sys.exit(mainret)
