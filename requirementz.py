@@ -164,11 +164,12 @@ def add_line(filename, line):
 
     reqs = []
     replaced = False
+    reqname = req.name.lower()
     for existingname, op, requiredver in iter_specs(filename):
         existingreq = Requirement.parse_line(
             ' '.join((existingname, op, requiredver))
         )
-        if existingname == req.name:
+        if existingname.lower() == reqname:
             debug('Found existing requirement: {}'.format(existingname))
             if requirement_eq(req, existingreq):
                 file_backup_remove(filename)
