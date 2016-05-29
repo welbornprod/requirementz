@@ -11,7 +11,9 @@
     for readability).
 
     Originally designed for Python3, but backporting was fairly easy
-    (it cost some readability though). This should run on at least Python 2.7.
+    (it cost some readability though).
+    This should run on at least Python 2.7.
+    Color support is Python 3 only.
     -Christopher Welborn 07-19-2015
 """
 
@@ -25,6 +27,10 @@ import re
 import shutil
 import sys
 from pkg_resources import parse_version
+
+import requirements
+from docopt import docopt
+from requirements.requirement import Requirement
 
 try:
     from collections import UserList
@@ -43,16 +49,35 @@ except ImportError:
             yield
         except ex_class:
             pass
+
+# Use Colr if installed, otherwise use a 'fake Colr'.
 try:
     from colr import (auto_disable as colr_auto_disable, Colr as C)
     colr_auto_disable()
 except ImportError:
-    def C(text=None, fore=None, back=None, style=None):
-        return text or ''
+    # Colr will probably never support Python 2, but Requirementz should.
+    class C(object):
+        """ Fake Colr instance for Python 2 (doesn't do anything) """
+        def __init__(self, *args, **kwargs):
+            self.text = args[0] if args else kwargs.get('text', '')
 
-import requirements
-from docopt import docopt
-from requirements.requirement import Requirement
+        def __str__(self):
+            return self.text
+
+        def join(self, *args):
+            """ Colr.join accepts iterable or individual args, and flattens
+                at least once (cuts down on parentheses). Mimicking that here.
+            """
+            pcs = []
+            for a in args:
+                if isinstance(a, (list, tuple)):
+                    pcs.extend(a)
+                else:
+                    pcs.append(a)
+            return self.__class__(str(self).join(str(s) for s in pcs))
+
+        def ljust(self, width, char=' '):
+            return self.__class__(str(self).ljust(width, char))
 
 NAME = 'Requirementz'
 VERSION = '0.1.0'
@@ -63,13 +88,14 @@ USAGESTR = """{versionstr}
     Usage:
         {script} (-h | -p | -v) [-D]
         {script} [-c] [-e] [-r] [FILE] [-D]
-        {script} [-d | -l | -a line | (-s pat [-i])] [FILE] [-D]
+        {script} [-d | -l | -a line... | (-s pat [-i])] [FILE] [-D]
         {script} -S [FILE] [-D]
 
     Options:
         FILE                 : Requirements file to parse.
                                Default: requirements.txt
         -a line,--add line   : Add a requirement line to the file.
+                               The -a flag can be used multiple times.
         -c,--check           : Check installed packages against requirements.
         -D,--debug           : Print some debug info while running.
         -d,--duplicates      : List any duplicate entries.
@@ -141,7 +167,7 @@ def main(argd):
 
     # May opt-in to create a file that doesn't exist.
     if argd['--add']:
-        return add_line(filename, argd['--add'])
+        return add_lines(filename, argd['--add'])
 
     # File must exist for all other flags.
     if argd['--duplicates']:
@@ -154,7 +180,7 @@ def main(argd):
         return search_requirements(
             argd['--search'],
             filename=filename,
-            nocase=argd['--ignorecase'])
+            ignorecase=argd['--ignorecase'])
     elif argd['--check']:
         # Explicit check.
         return check_requirements(
@@ -173,33 +199,43 @@ def main(argd):
         spec_only=argd['--requirement'])
 
 
-def add_line(filename, line):
+def add_lines(filename, lines):
     """ Add a requirements line to the file.
         Returns 0 on success, and 1 on error.
         Prints any errors that occur.
     """
-    try:
-        req = RequirementPlus.parse(line)
-    except ValueError as ex:
-        print_err('Invalid requirement spec.: {}'.format(line))
-        return 1
     if not file_ensure_exists(filename):
         return 1
     reqs = Requirementz.from_file(filename)
+    msgs = []
+    for line in lines:
+        try:
+            req = RequirementPlus.parse(line)
+        except ValueError as ex:
+            print_err('Invalid requirement spec.: {}'.format(line))
+            return 1
 
-    try:
-        if reqs.add_line(line):
-            msg = 'Added requirement: {}'.format(req)
+        try:
+            if reqs.add_line(line):
+                msg = 'Added requirement: {}'.format(req)
+            else:
+                msg = 'Replaced requirement with: {}'.format(req)
+        except ValueError as ex:
+            raise FatalError(str(ex))
         else:
-            msg = 'Replaced requirement with: {}'.format(req)
-    except ValueError as ex:
-        raise FatalError(str(ex))
+            msgs.append(msg)
 
     try:
         reqs.write(filename=filename)
     except EnvironmentError as ex:
-        handle_env_err(filename, ex, msg='Failed to write file')
-    print(msg)
+        raise FatalError(
+            format_env_err(
+                filename=filename,
+                exc=ex,
+                msg='Failed to write file'
+            )
+        )
+    print('\n'.join(msgs))
     return 0
 
 
@@ -290,17 +326,20 @@ def file_ensure_exists(filename):
     return True
 
 
-def handle_env_err(filename, exc, msg=None):
-    """ Handles EnvironmentError by formatting a custom message and raising
-        FatalError.
-    """
-    raise FatalError('\n{}'.format(
+def format_env_err(**kwargs):
+    """ Format a custom message for EnvironmentErrors. """
+    exc = kwargs.get('exc', None)
+    if exc is None:
+        raise ValueError('`exc` is a required kwarg.')
+    filename = kwargs.get('filename', getattr(exc, 'filename', ''))
+    msg = kwargs.get('msg', 'Error with file')
+    return '\n{}'.format(
         FILE_ERRS.get(getattr(exc, 'errno', None)).format(
             filename=filename,
             exc=exc,
-            msg=msg or 'Error with file'
+            msg=msg
         )
-    ))
+    )
 
 
 def list_duplicates(filename=DEFAULT_FILE):
@@ -531,7 +570,7 @@ class Requirementz(UserList):
         except ValueError as ex:
             raise ValueError(
                 'Invalid requirement spec.: {}'.format(ex)
-            ) from ex
+            )
         reqname = req.name.lower()
         for i, existingreq in enumerate(self[:]):
             if reqname == existingreq.name.lower():
@@ -587,7 +626,7 @@ class Requirementz(UserList):
     def from_lines(cls, lines):
         """ Instantiate a Requirementz from a list of requirements.txt lines.
         """
-        return cls(RequirementPlus.parse(l) for l in lines)
+        return cls(RequirementPlus.parse(l) for l in sorted(lines))
 
     def get_byname(self, name):
         """ Return the first RequirementPlus found by name.
@@ -666,7 +705,12 @@ class SafeWriter(object):
         try:
             shutil.copy2(self.filename, backupfile)
         except EnvironmentError as ex:
-            handle_env_err(self.filename, ex, msg='Failed to backup')
+            raise FatalError(
+                format_env_err(
+                    filename=self.filename,
+                    exc=ex,
+                    msg='Failed to backup')
+            )
         self.backed_up = True
         return None
 
@@ -682,17 +726,17 @@ class SafeWriter(object):
         try:
             os.remove(backupfile)
         except EnvironmentError as ex:
-            handle_env_err(
-                backupfile,
-                ex,
+            raise FatalError(format_env_err(
+                filename=backupfile,
+                exc=ex,
                 msg='Failed to remove backup file'
-            )
+            ))
         return None
 
 
 class StatusLine(object):
     def __init__(self, req):
-        req = req
+        self.req = req
         self.error = False
 
         # Init this requirement's status line.
@@ -702,7 +746,7 @@ class StatusLine(object):
         )
         for op, ver in req.specs:
             if ver == '0':
-                requiredver = 'installed'
+                requiredver = C('installed', fore='cyan')
                 break
         else:
             requiredver = req.spec_string()
@@ -712,27 +756,32 @@ class StatusLine(object):
         if installedver is None:
             # No version installed.
             installverstr = None
-            installverfmt = 'not installed'
-            errstatus = '!'
+            installverfmt = C('not installed', fore='red')
+            errstatus = C('!', fore='red')
             self.error = True
         else:
             installverstr = installedver.specs[0][1]
-            installverfmt = 'v. {}'.format(installverstr)
+            installverfmt = C(' ').join('v.', C(installverstr, fore='cyan'))
             if req.satisfied():
                 # Version installed/required mismatches (still okay)
-                errstatus = ' ' if installverstr in includedvers else '-'
+                if installverstr in includedvers:
+                    errstatus = ' '
+                else:
+                    errstatus = C('-', fore='yellow')
             else:
-                errstatus = '!'
+                errstatus = C('!', fore='red')
                 self.error = True
 
+        verboseerr = C('Error', fore='red', style='bright')
+        verboseok = C('Ok', fore='green')
         # Build status line.
-        s = '{verbose:<5} {name:<30} {installed:<13} {status} {required}'
+        s = '{verbose} {name} {installed} {status} {required}'
         self.status = s.format(
-            verbose='Error' if self.error else 'Ok',
-            name=installedver.name,
-            installed=installverfmt,
+            verbose=(verboseerr if self.error else verboseok).ljust(5),
+            name=C(req.name, fore='blue').ljust(30),
+            installed=installverfmt.ljust(13),
             status=errstatus,
-            required=requiredver
+            required=C(requiredver, fore=('red' if self.error else 'green'))
         )
 
     def __str__(self):
@@ -744,5 +793,8 @@ if __name__ == '__main__':
         mainret = main(docopt(USAGESTR, version=VERSIONSTR))
     except FatalError as ex:
         print_err('\n{}\n'.format(ex))
+        mainret = 1
+    except EnvironmentError as ex:
+        print_err(format_env_err(exc=ex))
         mainret = 1
     sys.exit(mainret)
