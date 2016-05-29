@@ -73,22 +73,21 @@ class RequirementzTests(unittest.TestCase):
     def test_duplicates(self):
         """ Requirementz.duplicates() catches duplicate entries """
         dupereqs = (
-            # First dupe returned, index 0.
-            RequirementPlus.parse_line('docopt >= 0.6.2'),
-            RequirementPlus.parse_line('docopt <= 7.0.0'),
-            # Second dupe returned, index 2.
-            RequirementPlus.parse_line('six > 0'),
-            RequirementPlus.parse_line('six >= 1.0.0'),
-            RequirementPlus.parse_line('six >= 5.1.6'),
-            # Not returned at all, no dupes.
-            RequirementPlus.parse_line('lone == 1.0.0'),
+                RequirementPlus.parse_line('docopt >= 0.6.2'),
+                RequirementPlus.parse_line('docopt <= 7.0.0'),
+                RequirementPlus.parse_line('six > 0'),
+                RequirementPlus.parse_line('six >= 1.0.0'),
+                RequirementPlus.parse_line('six >= 5.1.6'),
+                # Not returned at all, no dupes.
+                RequirementPlus.parse_line('lone == 1.0.0'),
         )
         reqs = Requirementz.from_lines(str(r) for r in dupereqs)
+        dupesbyname = {r.name: num for r, num in reqs.duplicates().items()}
         self.assertDictEqual(
-            reqs.duplicates(),
+            dupesbyname,
             {
-                dupereqs[0]: 1,
-                dupereqs[2]: 2
+                'docopt': 1,
+                'six': 2
             }
         )
 
