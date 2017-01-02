@@ -56,6 +56,7 @@ try:
     colr_auto_disable()
 except ImportError:
     # Colr will probably never support Python 2, but Requirementz should.
+    # I'm only implementing a few Colr methods that are used by Requirementz.
     class C(object):
         """ Fake Colr instance for Python 2 (doesn't do anything) """
         def __init__(self, *args, **kwargs):
@@ -80,14 +81,14 @@ except ImportError:
             return self.__class__(str(self).ljust(width, char))
 
 NAME = 'Requirementz'
-VERSION = '0.1.0'
+VERSION = '0.2.0'
 VERSIONSTR = '{} v. {}'.format(NAME, VERSION)
 SCRIPT = os.path.split(os.path.abspath(sys.argv[0]))[1]
 
 USAGESTR = """{versionstr}
     Usage:
         {script} (-h | -p | -v) [-D]
-        {script} [-c] [-e] [-r] [FILE] [-D]
+        {script} [-c | -e] [-r] [FILE] [-D]
         {script} [-d | -l | -a line... | (-s pat [-i])] [FILE] [-D]
         {script} -S [FILE] [-D]
 
@@ -99,7 +100,7 @@ USAGESTR = """{versionstr}
         -c,--check           : Check installed packages against requirements.
         -D,--debug           : Print some debug info while running.
         -d,--duplicates      : List any duplicate entries.
-        -e,--errors          : Only show errored packages with -c.
+        -e,--errors          : Like -c, but only show packages with errors.
         -h,--help            : Show this help message.
         -i,--ignorecase      : Case insensitive when searching.
         -l,--list            : List all requirements.
@@ -123,17 +124,10 @@ USAGESTR = """{versionstr}
     py_ver=sys.version_info
 )
 
-try:
-    # Map from package name to pip package.
-    PKGS = {
-        p.project_name.lower(): p
-        for p in pip.get_installed_distributions(local_only=False)
-    }
-except Exception as ex:
-    print('\nUnable to retrieve packages with pip: {}'.format(ex))
-    sys.exit(1)
+# Handling this flag the old way for early access (before docopt arg parsing).
+DEBUG = ('-D' in sys.argv) or ('--debug' in sys.argv)
 
-# Map from comparison operator to actual function.
+# Map from comparison operator to actual version comparison function.
 OP_FUNCS = {
     '==': lambda v1, v2: parse_version(v1) == parse_version(v2),
     '>=': lambda v1, v2: parse_version(v1) >= parse_version(v2),
@@ -154,8 +148,8 @@ FILE_ERRS = {
     None: '{msg}: {filename}\n{exc}'
 }
 
+# Operates on ./requirements.txt by default.
 DEFAULT_FILE = 'requirements.txt'
-DEBUG = False
 
 
 def main(argd):
@@ -181,7 +175,7 @@ def main(argd):
             argd['--search'],
             filename=filename,
             ignorecase=argd['--ignorecase'])
-    elif argd['--check']:
+    elif argd['--check'] or argd['--errors']:
         # Explicit check.
         return check_requirements(
             filename,
@@ -267,6 +261,10 @@ def debug(*args, **kwargs):
     if not (DEBUG and args):
         return None
 
+    # Use stderr by default.
+    if kwargs.get('file', None) is None:
+        kwargs['file'] = sys.stderr
+
     # Include parent class name when given.
     parent = kwargs.get('parent', None)
     with suppress(KeyError):
@@ -280,8 +278,12 @@ def debug(*args, **kwargs):
     frame = inspect.currentframe()
     # Go back a number of frames (usually 1).
     while backlevel > 0:
+        if frame is None:
+            raise ValueError('`level` is too large, there is no frame.')
         frame = frame.f_back
         backlevel -= 1
+    if frame is None:
+        raise ValueError('`level` is too large, there is no frame.')
     fname = os.path.split(frame.f_code.co_filename)[-1]
     lineno = frame.f_lineno
     if parent:
@@ -289,15 +291,40 @@ def debug(*args, **kwargs):
     else:
         func = frame.f_code.co_name
 
-    lineinfo = '{}:{} {}: '.format(
+    # Use the colorized lineinfo for printing.
+    lineinfo = C('{}:{} {}: '.format(
         C(fname, 'yellow'),
-        C(str(lineno).ljust(4), 'blue'),
-        C().join(C(func, 'magenta'), '()').ljust(20)
-    )
-    # Patch args to stay compatible with print().
+        C(str(lineno).rjust(5), 'blue'),
+        C().join(C(func, 'magenta'), '()').rjust(25)
+    ))
+
+    # Are we omitting the line info, and just aligning with the end of it?
+    align = kwargs.get('align', False)
+    with suppress(KeyError):
+        kwargs.pop('align')
+
+    # An editable arg list, for patching.
     pargs = list(C(a, 'green').str() for a in args)
-    pargs[0] = ''.join((lineinfo, pargs[0]))
+
+    # Is this a continuation from a previous line?
+    # Getting this for debug(), re-setting for print().
+    kwargs['end'] = kwargs.get('end', '\n')
+    willcontinue = (not kwargs['end'].endswith('\n'))
+    continued = debug.continued.get(kwargs['file'], False)
+    if align or continued:
+        debug.continued[kwargs['file']] = willcontinue
+        if align:
+            pargs[0] = ''.join((' ' * len(lineinfo.stripped()), pargs[0]))
+        print(*pargs, **kwargs)
+        return None
+    debug.continued[kwargs['file']] = willcontinue
+
+    # Patch args to stay compatible with print().
+    pargs[0] = ''.join((str(lineinfo), pargs[0]))
     print(*pargs, **kwargs)
+# This dict tracks whether line info should be included, based on whether
+# the last line's `end` had a newline in it, per file descriptor.
+debug.continued = {}
 
 
 def file_ensure_exists(filename):
@@ -379,6 +406,26 @@ def list_requirements(filename=DEFAULT_FILE):
     """ Lists current requirements. """
     reqs = Requirementz.from_file(filename=filename)
     print('\n'.join(str(r) for r in reqs))
+
+
+def load_packages(local_only=False):
+    """ Load all known packages from pip.
+        Returns a dict of {package_name.lower(): Package}
+        Possibly raises a FatalError.
+    """
+    debug('Loading package list...')
+    try:
+        # Map from package name to pip package.
+        pkgs = {
+            p.project_name.lower(): p
+            for p in pip.get_installed_distributions(local_only=local_only)
+        }
+    except Exception as ex:
+        raise FatalError(
+            'Unable to retrieve packages with pip: {}'.format(ex)
+        )
+    debug('Packages loaded: {}'.format(len(pkgs)))
+    return pkgs
 
 
 def pkg_installed_version(pkgname):
@@ -787,6 +834,8 @@ class StatusLine(object):
     def __str__(self):
         return self.status
 
+# Global {package_name: package} dict.
+PKGS = load_packages()
 
 if __name__ == '__main__':
     try:
