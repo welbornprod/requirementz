@@ -10,75 +10,32 @@
     and list requirements or all installed packages (both formatted
     for readability).
 
-    Originally designed for Python3, but backporting was fairly easy
-    (it cost some readability though).
-    This should run on at least Python 2.7.
-    Color support is Python 3 only.
+    This is for Python 3 only.
     -Christopher Welborn 07-19-2015
 """
 
 # TODO: Figure out what to do with cvs or local requirements. -Cj
-
-from __future__ import print_function
 import inspect
+import json
 import os
 import pip
 import re
 import shutil
 import sys
+from collections import UserList
+from contextlib import suppress
 from pkg_resources import parse_version
+from urllib.error import HTTPError
+from urllib.request import urlopen
 
-import requirements
-from docopt import docopt
 from requirements.requirement import Requirement
+from colr import (
+    auto_disable as colr_auto_disable,
+    docopt,
+    Colr as C
+)
+colr_auto_disable()
 
-try:
-    from collections import UserList
-except ImportError:
-    # Python 2.7 UserList.
-    from UserList import UserList
-try:
-    from contextlib import suppress
-except ImportError:
-    # Python 2.7 suppress.
-    from contextlib import contextmanager
-
-    @contextmanager
-    def suppress(*ex_class):
-        try:
-            yield
-        except ex_class:
-            pass
-
-# Use Colr if installed, otherwise use a 'fake Colr'.
-try:
-    from colr import (auto_disable as colr_auto_disable, Colr as C)
-    colr_auto_disable()
-except ImportError:
-    # Colr will probably never support Python 2, but Requirementz should.
-    # I'm only implementing a few Colr methods that are used by Requirementz.
-    class C(object):
-        """ Fake Colr instance for Python 2 (doesn't do anything) """
-        def __init__(self, *args, **kwargs):
-            self.text = args[0] if args else kwargs.get('text', '')
-
-        def __str__(self):
-            return self.text
-
-        def join(self, *args):
-            """ Colr.join accepts iterable or individual args, and flattens
-                at least once (cuts down on parentheses). Mimicking that here.
-            """
-            pcs = []
-            for a in args:
-                if isinstance(a, (list, tuple)):
-                    pcs.extend(a)
-                else:
-                    pcs.append(a)
-            return self.__class__(str(self).join(str(s) for s in pcs))
-
-        def ljust(self, width, char=' '):
-            return self.__class__(str(self).ljust(width, char))
 
 NAME = 'Requirementz'
 VERSION = '0.2.0'
@@ -90,11 +47,14 @@ USAGESTR = """{versionstr}
         {script} (-h | -p | -v) [-D]
         {script} [-c | -e] [-r] [FILE] [-D]
         {script} [-d | -l | -a line... | (-s pat [-i])] [FILE] [-D]
+        {script} -L [FILE] [-D]
         {script} -S [FILE] [-D]
+        {script} PACKAGE...
 
     Options:
         FILE                 : Requirements file to parse.
                                Default: requirements.txt
+        PACKAGE              : Show pypi info for packages.
         -a line,--add line   : Add a requirement line to the file.
                                The -a flag can be used multiple times.
         -c,--check           : Check installed packages against requirements.
@@ -103,6 +63,8 @@ USAGESTR = """{versionstr}
         -e,--errors          : Like -c, but only show packages with errors.
         -h,--help            : Show this help message.
         -i,--ignorecase      : Case insensitive when searching.
+        -L,--checklatest     : Check installed packages and latest versions
+                               from PyPi against requirements.
         -l,--list            : List all requirements.
         -p,--packages        : List all installed packages.
         -r,--requirement     : Print name and version requirement only for -c.
@@ -174,23 +136,30 @@ def main(argd):
         return search_requirements(
             argd['--search'],
             filename=filename,
-            ignorecase=argd['--ignorecase'])
-    elif argd['--check'] or argd['--errors']:
+            ignorecase=argd['--ignorecase']
+        )
+    elif argd['--check'] or argd['--errors'] or argd['--checklatest']:
         # Explicit check.
         return check_requirements(
             filename,
             errors_only=argd['--errors'],
-            spec_only=argd['--requirement'])
+            spec_only=argd['--requirement'],
+            latest=argd['--checklatest']
+        )
     elif argd['--sort']:
         sort_requirements(filename)
         print('Sorted requirements file: {}'.format(filename))
         return 0
+    elif argd['PACKAGE']:
+        return show_package_infos(argd['PACKAGE'])
 
     # Default action, check.
     return check_requirements(
         filename,
         errors_only=argd['--errors'],
-        spec_only=argd['--requirement'])
+        spec_only=argd['--requirement'],
+        latest=argd['--checklatest'],
+    )
 
 
 def add_lines(filename, lines):
@@ -234,7 +203,8 @@ def add_lines(filename, lines):
 
 
 def check_requirements(
-        filename=DEFAULT_FILE, errors_only=False, spec_only=False):
+        filename=DEFAULT_FILE,
+        errors_only=False, spec_only=False, latest=False):
     """ Check requirements against installed versions and print status lines
         for all of them.
     """
@@ -251,6 +221,8 @@ def check_requirements(
             errs += 1
         if spec_only:
             print(statusline.spec)
+        elif latest:
+            print(statusline.with_latest())
         else:
             print(statusline)
     return errs
@@ -322,6 +294,8 @@ def debug(*args, **kwargs):
     # Patch args to stay compatible with print().
     pargs[0] = ''.join((str(lineinfo), pargs[0]))
     print(*pargs, **kwargs)
+
+
 # This dict tracks whether line info should be included, based on whether
 # the last line's `end` had a newline in it, per file descriptor.
 debug.continued = {}
@@ -369,6 +343,38 @@ def format_env_err(**kwargs):
     )
 
 
+def get_pypi_info(packagename):
+    url = 'https://pypi.python.org/pypi/{}/json'.format(packagename)
+    try:
+        con = urlopen(url)
+    except HTTPError as excon:
+        excon.msg = '\n'.join((
+            'Unable to connect to get info for: {}'.format(url),
+            excon.msg
+        ))
+        raise excon
+    else:
+        try:
+            jsonstr = con.read().decode()
+        except UnicodeDecodeError as exdec:
+            raise UnicodeDecodeError(
+                'Unable to decode data from package info: {}\n{}'.format(
+                    url,
+                    exdec
+                ),
+            ) from exdec
+        finally:
+            con.close()
+
+    try:
+        data = json.loads(jsonstr)
+    except ValueError as exjson:
+        raise ValueError(
+            'Unable to decode JSON data from: {}\n{}'.format(url, exjson),
+        ) from exjson
+    return data
+
+
 def list_duplicates(filename=DEFAULT_FILE):
     """ Print any duplicate package names found in the file.
         Returns the number of duplicates found.
@@ -387,7 +393,7 @@ def list_duplicates(filename=DEFAULT_FILE):
         print('{name:>30} has {num} {plural}'.format(
             name=req.name,
             num=dupcount,
-            plural='duplicate' if dupecount == 1 else 'duplicates'
+            plural='duplicate' if dupcount == 1 else 'duplicates'
         ))
     return sum(dupes.values())
 
@@ -453,7 +459,10 @@ def print_err(*args, **kwargs):
     """ Print a message to stderr by default. """
     if kwargs.get('file', None) is None:
         kwargs['file'] = sys.stderr
-    print(C(kwargs.get('sep', ' ').join(args), 'red'), **kwargs)
+    print(
+        C(kwargs.get('sep', ' ').join(str(a) for a in args), 'red'),
+        **kwargs
+    )
 
 
 def search_requirements(
@@ -478,6 +487,83 @@ def search_requirements(
     return 0 if found > 0 else 1
 
 
+def show_package_info(packagename):
+    """ Show local and pypi info for a package, by name.
+        Returns 0 on success, 1 on failure.
+    """
+    try:
+        pypiinfo = get_pypi_info(packagename)
+    except (HTTPError, UnicodeDecodeError, ValueError) as ex:
+        print_err(ex)
+        return 1
+    info = pypiinfo.get('info', {})
+    if not info:
+        print_err('No info for package: {}'.format(packagename))
+        return 1
+    releases = pypiinfo.get('releases', [])
+    otherreleasecnt = len(releases) - 1
+    releasecntstr = ''
+    if otherreleasecnt:
+        releasecntstr = C('').join(
+            C('+', 'yellow'),
+            C(otherreleasecnt, 'blue', style='bright'),
+            C(' releases', 'yellow')
+        ).join('(', ')', style='bright')
+
+    pkgstr = '\n'.join((
+        '\n{name} {ver} {releasecnt}',
+        '    {summary}',
+    )).format(
+            name=C(info['name'].ljust(30), 'blue'),
+            ver=C(info['version'].ljust(10), 'lightblue'),
+            releasecnt=releasecntstr,
+            summary=C(info['summary'].strip(), 'cyan'),
+    )
+    label_color = 'blue'
+    value_color = 'cyan'
+
+    authorstr = ''
+    if info['author'] and info['author'] not in ('UNKNOWN', ):
+        authorstr = C(': ').join(
+            C('Author', label_color),
+            C(info['author'], value_color)
+        )
+    emailstr = ''
+    if info['author_email'] and info['author_email'] not in ('UNKNOWN', ):
+        emailstr = C(info['author_email'], value_color).join('<', '>')
+
+    if authorstr or emailstr:
+        pkgstr = '\n'.join((
+            pkgstr,
+            '    {author}{email}'.format(
+                author=authorstr,
+                email=' {}'.format(emailstr) if authorstr else emailstr,
+            )
+        ))
+
+    if info['home_page']:
+        homepagestr = C(': ').join(
+            C('Homepage', label_color),
+            C(info['home_page'], value_color)
+        )
+        pkgstr = '\n'.join((
+            pkgstr,
+            '    {homepage}'.format(
+                homepage=homepagestr,
+            )
+        ))
+
+    print(pkgstr)
+    return 0
+
+
+def show_package_infos(packagenames):
+    """ Show local and pypi info for a list of package names.
+        Returns 0 on success, otherwise returns the number of errors.
+    """
+    return sum(show_package_info(name) for name in packagenames)
+
+
 def sort_requirements(filename=DEFAULT_FILE):
     """ Sort a requirements file, and re-write it. """
     reqs = Requirementz.from_file(filename=filename)
@@ -499,7 +585,7 @@ class RequirementPlus(Requirement):
     def __init__(self, line):
         # Requirement asks that you do not call __init__ directly,
         # but use the parse* class methods (requirement.py:128).
-        super(RequirementPlus, self).__init__(line)
+        super().__init__(line)
         # Cache the installed version of this requirement, when needed.
         self._installed_ver = None
 
@@ -579,16 +665,33 @@ class RequirementPlus(Requirement):
         )
         return self._installed_ver
 
-    def satisfied(self):
+    def satisfied(self, against=None):
         """ Return True if this requirement is satisfied by the installed
             version. Non-installed packages never satisfy the requirement.
+            If no `against` requirement is given, and no installed version
+            exists, this always returns False.
+            Arguments:
+                against  : Requirement/RequirementPlus or version string to
+                           test against.
+                           Default: installed version Requirement, if any.
         """
-        installedreq = self.installed_version()
-        if installedreq is None:
+        againstreq = self.installed_version() if against is None else against
+        if againstreq is None:
             return False
-        for _, installedver in installedreq.specs:
+        if isinstance(againstreq, str):
+            againstspecs = (('', againstreq), )
+        elif hasattr(againstreq, 'specs'):
+            againstspecs = againstreq.specs
+        else:
+            raise TypeError(
+                ' '.join((
+                    'Expecting version str or Requirement/RequirementPlus,',
+                    'got: ({}) {!r}'
+                )).format(type(against).__name__, against)
+            )
+        for _, againstver in againstspecs:
             for op, ver in self.specs:
-                if self.compare_versions(installedver, op, ver):
+                if self.compare_versions(againstver, op, ver):
                     return True
         return False
 
@@ -785,6 +888,9 @@ class StatusLine(object):
     def __init__(self, req):
         self.req = req
         self.error = False
+        # Cached by self.with_latest() on demand.
+        self.pypi_info = None
+        self.status_latest = None
 
         # Init this requirement's status line.
         installedver = req.installed_version()
@@ -814,9 +920,9 @@ class StatusLine(object):
                 if installverstr in includedvers:
                     errstatus = ' '
                 else:
-                    errstatus = C('-', fore='yellow')
+                    errstatus = C('-', fore='yellow', style='bright')
             else:
-                errstatus = C('!', fore='red')
+                errstatus = C('!', fore='red', style='bright')
                 self.error = True
 
         verboseerr = C('Error', fore='red', style='bright')
@@ -828,22 +934,74 @@ class StatusLine(object):
             name=C(req.name, fore='blue').ljust(30),
             installed=installverfmt.ljust(13),
             status=errstatus,
-            required=C(requiredver, fore=('red' if self.error else 'green'))
+            required=C(
+                requiredver.ljust(12),
+                fore=('red' if self.error else 'green')
+            )
         )
+
+    def with_latest(self):
+        """ Return this status line, with the latest available version
+            appended. This connects to pypi to retrieve the latest.
+            Possibly raises urllib.error.HTTPError, UnicodeDecodeError, and
+            ValueError from `get_pypi_info()`.
+        """
+        if self.status_latest:
+            return self.status_latest
+
+        # Grab pypi info from python.org.
+        pypiinfo = get_pypi_info(self.req.name)
+
+        latest = pypiinfo.get('info', {}).get('version', None)
+        if latest is None:
+            print_err('No version info found for: {name}'.format(
+                name=self.req.name
+            ))
+            return self.status
+        self.pypi_info = pypiinfo
+
+        if self.req.satisfied(against=latest):
+            reqver = self.req.specs[0][1]
+            if reqver == latest:
+                markerstr = ' '
+                latest_color = 'green'
+            else:
+                markerstr = C('-', 'yellow', style='bright')
+                latest_color = 'yellow'
+        else:
+            latest_color = 'red'
+            markerstr = C('!', 'red', style='bright')
+
+        # 256 color number for lightpurple.
+        lightpurple = 63
+        self.status_latest = '{} {}'.format(
+            self.status,
+            C(
+                '{} {}: {}'.format(
+                    markerstr,
+                    C('pypi', lightpurple),
+                    C(self.pypi_info['info']['version'], fore=latest_color),
+                )
+            )
+        )
+        return self.status_latest
 
     def __str__(self):
         return self.status
 
+
 # Global {package_name: package} dict.
 PKGS = load_packages()
 
+
 if __name__ == '__main__':
     try:
-        mainret = main(docopt(USAGESTR, version=VERSIONSTR))
-    except FatalError as ex:
+        mainret = main(docopt(USAGESTR, version=VERSIONSTR, script=SCRIPT))
+    except (FatalError, HTTPError, UnicodeDecodeError, ValueError) as ex:
         print_err('\n{}\n'.format(ex))
         mainret = 1
     except EnvironmentError as ex:
         print_err(format_env_err(exc=ex))
         mainret = 1
+
     sys.exit(mainret)

@@ -10,6 +10,9 @@
 import os
 import sys
 import unittest
+from urllib.error import HTTPError
+from urllib.request import urlopen
+
 from requirementz import (
     RequirementPlus,
     Requirementz,
@@ -18,13 +21,32 @@ from requirementz import (
 )
 compare_versions = RequirementPlus.compare_versions
 
-# Not many tests here yet.
+
 TEST_LINES = (
+    # test_StatusLine_with_latest() depends on this colr line,
+    # index doesn't matter.
+    'colr >= 0.5.2',
+    # test_search() depends on this docopt line,
+    # index doesn't matter.
     'docopt >= 0.6.2',
     'requirements-parser >= 0.1.0'
 )
 
 TEST_FILE = 'test_requirements.txt'
+
+HAS_CONNECTION = False
+CONNECTION_SITES = ('https://welbornprod.com', 'https://google.com')
+for url in CONNECTION_SITES:
+    try:
+        # Try connecting to a site, to test internet connection.
+        con = urlopen(url)
+    except HTTPError:
+        pass
+    else:
+        HAS_CONNECTION = True
+        break
+    finally:
+        con.close()
 
 
 class RequirementzTests(unittest.TestCase):
@@ -38,7 +60,7 @@ class RequirementzTests(unittest.TestCase):
         reqs = Requirementz.from_lines(TEST_LINES)
         reqs.add_line('docopt >= 0.6.1')
         self.assertTrue(
-            len(reqs) == 2,
+            len(reqs) == len(TEST_LINES),
             msg='Existing requirement not replaced.'
         )
         r = reqs.get_byname('docopt')
@@ -52,8 +74,15 @@ class RequirementzTests(unittest.TestCase):
         """ Requirementz.add_line() works for new entries """
         reqs = Requirementz.from_lines(TEST_LINES)
         reqs.add_line('six >= 0.0.1')
-        self.assertTrue(len(reqs) == 3, msg='New requirement not added.')
-        self.assertIn('six', reqs.names(), msg='New requirement not added.')
+        self.assertTrue(
+            len(reqs) == len(TEST_LINES) + 1,
+            msg='New requirement not added.'
+        )
+        self.assertIn(
+            'six',
+            reqs.names(),
+            msg='New requirement not added.'
+        )
 
     def test_compare_versions(self):
         """ RequirementPlus.compare_versions() works """
@@ -95,22 +124,28 @@ class RequirementzTests(unittest.TestCase):
         """ Requirementz.init() from file works """
         reqs = Requirementz.from_lines(TEST_LINES)
         reqs.write(TEST_FILE)
-        _ = Requirementz.from_file(TEST_FILE)
+        Requirementz.from_file(TEST_FILE)
 
     def test_init_lines(self):
         """ Requirementz.init() from lines works """
-        reqs = Requirementz.from_lines(TEST_LINES)
+        Requirementz.from_lines(TEST_LINES)
 
     def test_search(self):
         """ Requirementz.search() finds existing requirements """
         reqs = Requirementz.from_lines(TEST_LINES)
+        for i, knownline in enumerate(TEST_LINES):
+            if 'docopt' in knownline:
+                known_index = i
+                break
+        else:
+            self.fail('Bad test, failed to find known test requirement.')
         found = tuple(reqs.search('docopt'))
         self.assertTrue(
             len(found) == 1,
             msg='Failed to find requirement.'
         )
         self.assertEqual(
-            reqs[0],
+            reqs[known_index],
             found[0],
             msg='Failed to find correct requirement.'
         )
@@ -120,7 +155,7 @@ class RequirementzTests(unittest.TestCase):
             msg='Failed to find case-insensitive requirement.'
         )
         self.assertEqual(
-            reqs[0],
+            reqs[known_index],
             found[0],
             msg='Failed to find correct case-insensitive requirement.'
         )
@@ -130,7 +165,7 @@ class RequirementzTests(unittest.TestCase):
             msg='Failed to find requirement by version.'
         )
         self.assertEqual(
-            reqs[0],
+            reqs[known_index],
             found[0],
             msg='Failed to find correct requirement by version.'
         )
@@ -140,7 +175,7 @@ class RequirementzTests(unittest.TestCase):
             msg='Failed to find requirement.'
         )
         self.assertEqual(
-            reqs[0],
+            reqs[known_index],
             found[0],
             msg='Failed to find requirement by spec.'
         )
@@ -174,10 +209,48 @@ class RequirementzTests(unittest.TestCase):
 
 
 class StatusLineTests(unittest.TestCase):
-    def test_status_line(self):
+    def test_StatusLine(self):
         """ init() from requirement works """
         reqs = Requirementz.from_lines(TEST_LINES)
-        statuslines = [StatusLine(r) for r in reqs]
+        [StatusLine(r) for r in reqs]
+
+    @unittest.skipUnless(HAS_CONNECTION, 'Unreliable i-net connection.')
+    def test_StatusLine_with_latest(self):
+        """ StatusLine.with_latest should retrieve pypi info. """
+
+        # Ensure no pypi errors for known package name.
+        name = 'colr'
+        req = RequirementPlus.parse(name)
+        try:
+            StatusLine(req).with_latest()
+        except (HTTPError, UnicodeDecodeError, ValueError) as ex:
+            self.fail(
+                ' '.join((
+                    'Failed to retrieve info for known package:',
+                    '{}\n{}'
+                )).format(name, ex)
+            )
+        # Ensure failure for obviously bad package.
+        name = 'THERE_IS_NO_PACKAGE_WITH_THIS_NAME'
+        req = RequirementPlus.parse(name)
+        try:
+            StatusLine(req).with_latest()
+        except HTTPError as ex:
+            if ex.code == 404:
+                # This is what we expected.
+                return
+            else:
+                self.fail(
+                    'PyPi returned unexpected error number: {}\n{}'.format(
+                        ex.errno,
+                        ex
+                    )
+                )
+        else:
+            self.fail(
+                'Should have failed for bad package name: {}'.format(name)
+            )
+
 
 if __name__ == '__main__':
     sys.exit(unittest.main(argv=sys.argv))
