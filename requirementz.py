@@ -22,6 +22,7 @@ import pip
 import re
 import shutil
 import sys
+import traceback
 from collections import UserList
 from contextlib import suppress
 from pkg_resources import parse_version
@@ -38,22 +39,20 @@ colr_auto_disable()
 
 
 NAME = 'Requirementz'
-VERSION = '0.2.0'
+VERSION = '0.2.1'
 VERSIONSTR = '{} v. {}'.format(NAME, VERSION)
 SCRIPT = os.path.split(os.path.abspath(sys.argv[0]))[1]
 
 USAGESTR = """{versionstr}
     Usage:
         {script} (-h | -p | -v) [-D]
-        {script} [-c | -e] [-r] [FILE] [-D]
-        {script} [-d | -l | -a line... | (-s pat [-i])] [FILE] [-D]
-        {script} -L [FILE] [-D]
-        {script} -S [FILE] [-D]
-        {script} PACKAGE...
+        {script} [-c | -e] [-r] [-f file] [-D]
+        {script} [-d | -l | -a line... | (-s pat [-i])] [-f file] [-D]
+        {script} -L [-f file] [-D]
+        {script} -S [-f file] [-D]
+        {script} PACKAGE... [-D]
 
     Options:
-        FILE                 : Requirements file to parse.
-                               Default: requirements.txt
         PACKAGE              : Show pypi info for packages.
         -a line,--add line   : Add a requirement line to the file.
                                The -a flag can be used multiple times.
@@ -61,6 +60,8 @@ USAGESTR = """{versionstr}
         -D,--debug           : Print some debug info while running.
         -d,--duplicates      : List any duplicate entries.
         -e,--errors          : Like -c, but only show packages with errors.
+        -f file,--file file  : Requirements file to parse.
+                               Default: ./requirements.txt
         -h,--help            : Show this help message.
         -i,--ignorecase      : Case insensitive when searching.
         -L,--checklatest     : Check installed packages and latest versions
@@ -118,8 +119,7 @@ def main(argd):
     """ Main entry point, expects doctopt arg dict as argd. """
     global DEBUG
     DEBUG = argd['--debug']
-
-    filename = argd['FILE'] or os.path.join(os.getcwd(), DEFAULT_FILE)
+    filename = argd['--file'] or os.path.join(os.getcwd(), DEFAULT_FILE)
 
     # May opt-in to create a file that doesn't exist.
     if argd['--add']:
@@ -494,7 +494,9 @@ def show_package_info(packagename):
     try:
         pypiinfo = get_pypi_info(packagename)
     except (HTTPError, UnicodeDecodeError, ValueError) as ex:
-        print_err(ex)
+        print_err(
+            'Failed to get pypi info for: {}\n{}'.format(packagename, ex)
+        )
         return 1
     info = pypiinfo.get('info', {})
     if not info:
@@ -998,10 +1000,16 @@ if __name__ == '__main__':
     try:
         mainret = main(docopt(USAGESTR, version=VERSIONSTR, script=SCRIPT))
     except (FatalError, HTTPError, UnicodeDecodeError, ValueError) as ex:
-        print_err('\n{}\n'.format(ex))
+        if DEBUG:
+            print_err('\n{}\n'.format(traceback.format_exc()))
+        else:
+            print_err('\n{}\n'.format(ex))
         mainret = 1
     except EnvironmentError as ex:
-        print_err(format_env_err(exc=ex))
+        if DEBUG:
+            print_err(traceback.format_exc())
+        else:
+            print_err(format_env_err(exc=ex))
         mainret = 1
 
     sys.exit(mainret)
