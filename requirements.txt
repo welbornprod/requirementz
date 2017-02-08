@@ -1,3 +1,4 @@
 colr >= 0.5.2
 docopt >= 0.6.2
+formatblock >= 0.3.6
 requirements-parser >= 0.1.0

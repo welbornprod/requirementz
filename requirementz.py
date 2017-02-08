@@ -35,11 +35,12 @@ from colr import (
     docopt,
     Colr as C
 )
+from fmtblock import FormatBlock
 colr_auto_disable()
 
 
 NAME = 'Requirementz'
-VERSION = '0.2.1'
+VERSION = '0.2.2'
 VERSIONSTR = '{} v. {}'.format(NAME, VERSION)
 SCRIPT = os.path.split(os.path.abspath(sys.argv[0]))[1]
 
@@ -375,6 +376,22 @@ def get_pypi_info(packagename):
     return data
 
 
+def get_pypi_release_dls(releases):
+    """ Count downloads from the `releases` key of pypi info from
+        `get_pypi_info`.
+        Arguments:
+            releases : A dict of release versions and info from
+                       get_pypi_info(pkgname)['releases'].
+    """
+    if not releases:
+        return 0
+    return sum(
+        verinfo.get('downloads', 0)
+        for ver in releases
+        for verinfo in releases[ver]
+    )
+
+
 def list_duplicates(filename=DEFAULT_FILE):
     """ Print any duplicate package names found in the file.
         Returns the number of duplicates found.
@@ -519,7 +536,15 @@ def show_package_info(packagename):
             name=C(info['name'].ljust(30), 'blue'),
             ver=C(info['version'].ljust(10), 'lightblue'),
             releasecnt=releasecntstr,
-            summary=C(info['summary'].strip(), 'cyan'),
+            summary=C(
+                FormatBlock(info['summary'].strip()).format(
+                    width=76,
+                    newlines=True,
+                    prepend='    ',
+                    strip_first=True,
+                ),
+                'cyan'
+            ),
     )
     label_color = 'blue'
     value_color = 'cyan'
@@ -554,7 +579,31 @@ def show_package_info(packagename):
                 homepage=homepagestr,
             )
         ))
+    latestrelease = sorted(releases)[-1] if releases else None
+    if latestrelease:
+        latestdls = releases[latestrelease][0].get('downloads', 0)
+        alldls = get_pypi_release_dls(releases)
 
+        lateststr = C(' ').join(
+            C(': ').join(
+                C('Latest', label_color),
+                C(latestrelease, value_color)
+            ),
+            C('').join(
+                C(latestdls, 'blue'),
+                C(' dls', 'green'),
+                ', ',
+                C(alldls, 'blue'),
+                C(' for all versions', 'green'),
+            ).join('(', ')'),
+        )
+
+        pkgstr = '\n'.join((
+            pkgstr,
+            '    {latest}'.format(
+                latest=lateststr,
+            )
+        ))
     print(pkgstr)
     return 0
 
