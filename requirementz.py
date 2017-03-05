@@ -1065,18 +1065,19 @@ class SafeWriter(object):
 
     def file_backup_remove(self):
         """ Remove a backup file, after everything else is done. """
-        backupfile = '{}.bak'.format(self.filename)
-        if not os.path.exists(backupfile):
-            if self.backed_up:
-                debug('Backup file does not exist: {}'.format(backupfile))
+        if not self.backup:
+            debug('No backup file was set.')
+            return None
+        if not os.path.exists(self.backup):
+            debug('Backup file does not exist: {}'.format(self.backup))
             return None
 
-        debug('Removing backup file: {}'.format(backupfile))
+        debug('Removing backup file: {}'.format(self.backup))
         try:
-            os.remove(backupfile)
+            os.remove(self.backup)
         except EnvironmentError as ex:
             raise FatalError(format_env_err(
-                filename=backupfile,
+                filename=self.backup,
                 exc=ex,
                 msg='Failed to remove backup file'
             ))
