@@ -550,7 +550,11 @@ def show_package_info(packagename):
         ))
     latestrelease = sorted(releases)[-1] if releases else None
     if latestrelease:
-        latestdls = releases[latestrelease][0].get('downloads', 0)
+        try:
+            latestdls = releases[latestrelease][0].get('downloads', 0)
+        except IndexError:
+            # Latest release has no info dict.
+            latestdls = 0
         alldls = get_pypi_release_dls(releases)
 
         lateststr = C(' ').join(
