@@ -23,6 +23,7 @@ import shutil
 import sys
 import traceback
 from collections import UserList
+from contextlib import suppress
 from functools import total_ordering
 from pkg_resources import parse_version
 from urllib.error import HTTPError
@@ -57,12 +58,13 @@ USAGESTR = """{versionstr}
 
     Usage:
         {script} (-h | -v) [-D] [-n]
-        {script} [-c | -C | -e | -l] [-L | -r] [-f file] [-D] [-n]
-        {script} [-a line... | -d] [-f file] [-D] [-n]
-        {script} (-P | -S) [-f file] [-D] [-n]
-        {script} -p [-L] [-D] [-n]
-        {script} -s pat [-i] [-f file] [-D] [-n]
-        {script} PACKAGE... [-D] [-n]
+        {script} [-c | -C] [-e] [-L | -r] [-f file] [-D] [-n]
+        {script} [-a line... | -d]        [-f file] [-D] [-n]
+        {script} -l [-L | -r]             [-f file] [-D] [-n]
+        {script} (-P | -S)                [-f file] [-D] [-n]
+        {script} -p [-L]                            [-D] [-n]
+        {script} -s pat [-i]              [-f file] [-D] [-n]
+        {script} PACKAGE...                         [-D] [-n]
 
     Options:
         PACKAGE              : Show pypi info for package names.
@@ -73,7 +75,7 @@ USAGESTR = """{versionstr}
         -c,--check           : Check installed packages against requirements.
         -D,--debug           : Print some debug info while running.
         -d,--duplicates      : List any duplicate entries.
-        -e,--errors          : Like -c, but only show packages with errors.
+        -e,--errors          : Only show packages with errors when checking.
         -f file,--file file  : Requirements file to parse.
                                Default: ./requirements.txt
         -h,--help            : Show this help message.
@@ -133,8 +135,9 @@ FILE_ERRS = {
 # Operates on ./requirements.txt by default.
 DEFAULT_FILE = 'requirements.txt'
 
-# 256 color for light purple.
+# 256 color numbers.
 LIGHTPURPLE = 63
+LIGHTRED = 196
 
 
 def main(argd):
@@ -151,7 +154,16 @@ def main(argd):
         return add_lines(filename, argd['--add'])
 
     # File must exist for all other flags.
-    if argd['--duplicates']:
+    if argd['--check'] or argd['--checklatest']:
+        # Explicit check.
+        return check_requirements(
+            filename,
+            errors_only=argd['--errors'],
+            spec_only=argd['--requirement'],
+            latest=argd['--checklatest'],
+            location=argd['--location'],
+        )
+    elif argd['--duplicates']:
         return list_duplicates(filename)
     elif argd['--list']:
         return list_requirements(filename, location=argd['--location'])
@@ -162,15 +174,6 @@ def main(argd):
             argd['--search'],
             filename=filename,
             ignorecase=argd['--ignorecase']
-        )
-    elif argd['--check'] or argd['--errors'] or argd['--checklatest']:
-        # Explicit check.
-        return check_requirements(
-            filename,
-            errors_only=argd['--errors'],
-            spec_only=argd['--requirement'],
-            latest=argd['--checklatest'],
-            location=argd['--location'],
         )
     elif argd['--pypi']:
         return show_package_infos(get_requirement_names(filename))
@@ -249,7 +252,7 @@ def check_requirements(
         if statusline.error:
             errs += 1
         if spec_only:
-            print(statusline.req.to_str(color=True, align=True))
+            print(statusline.spec(color=True, align=True))
         elif latest:
             print(statusline.with_latest(color=True, location=location))
         else:
@@ -261,11 +264,15 @@ def colr_name(name, **kwargs):
     """ Colorize a name (str). This function is used for consistency.
         Any kwargs are passed on to Colr.
     """
-    return C(
-        name,
-        LIGHTPURPLE if is_local_pkg(name) else 'blue',
-        **kwargs
-    )
+    error = False
+    with suppress(KeyError):
+        error = kwargs.pop('error')
+
+    if error:
+        color = LIGHTRED if is_local_pkg(name) else 'red'
+    else:
+        color = LIGHTPURPLE if is_local_pkg(name) else 'blue'
+    return C(name, color, **kwargs)
 
 
 def colr_num(num, **kwargs):
@@ -777,7 +784,7 @@ class RequirementPlus(Requirement):
                     return True
         return False
 
-    def spec_string(self, color=False, ljust=None):
+    def spec_string(self, color=False, error=False, ljust=None):
         """ Just the spec string ('>= 1.0.0, <= 2.0.0') from this requirement.
         """
         if color:
@@ -785,7 +792,7 @@ class RequirementPlus(Requirement):
                 C(',').join(
                     C(' ').join(
                         C(op),
-                        C(ver, 'cyan'),
+                        C(ver, 'red' if error else 'cyan'),
                     )
                     for op, ver in self.specs
                 ).ljust(ljust or 0)
@@ -795,8 +802,16 @@ class RequirementPlus(Requirement):
             for op, ver in self.specs
         ).ljust(ljust or 0)
 
-    def to_str(self, color=False, align=False, location=False):
-        """ Like __str__, except colors can be used. """
+    def to_str(self, color=False, align=False, location=False, error=False):
+        """ Like __str__, except colors can be used, and more info can
+            be added.
+            Arguments:
+                color    : Whether to colorize the string.
+                align    : Whether to align the names/versions.
+                location : Whether to show the location for this requirement,
+                           (if installed).
+                error    : Whether to color the name as an error.
+        """
         if self.local_file:
             if color:
                 return str(C(' ').join(
@@ -842,7 +857,7 @@ class RequirementPlus(Requirement):
 
         namefmt = '{name:<{ljust}}'.format(
             name=C('').join(
-                colr_name(self.name) if color else self.name,
+                colr_name(self.name, error=error) if color else self.name,
                 extras,
             ),
             ljust=self.name_width if align else 0,
@@ -851,13 +866,14 @@ class RequirementPlus(Requirement):
             name=namefmt,
             ver=self.spec_string(
                 color=color,
-                ljust=self.ver_width if align else 0
+                error=error,
+                ljust=self.ver_width if align else 0,
             ),
         )
         if location:
             s = ' '.join((
                 s,
-                self.location(color=color),
+                self.location(color=color, default='Not Installed'),
             ))
         return s
 
@@ -1086,8 +1102,7 @@ class StatusLine(object):
                 break
         else:
             requiredver = req.spec_string()
-        self.spec_name = req.name
-        self.spec_ver = requiredver
+
         if installedver is None:
             # No version installed.
             installverstr = None
@@ -1115,7 +1130,7 @@ class StatusLine(object):
         )
         self.status_colr = colr_fmt.format(
             verbose=verboseerr if self.error else verboseok,
-            name=colr_name(req.name),
+            name=colr_name(req.name, error=self.error),
             installed=installverfmt,
             status=errstatus,
             required=C(
@@ -1138,16 +1153,13 @@ class StatusLine(object):
             return str(C(s, 'yellow'))
         return s
 
-    def spec(self, color=False):
+    def spec(self, color=False, align=False):
         """ Return self.spec if color is False, otherwise colorize self.spec
             and return it.
         """
-        if not color:
-            return '{} {}'.format(self.spec_name, self.spec_ver)
-        return str(C(' ').join(
-            colr_name(self.spec_name),
-            C(self.spec_ver, 'cyan')
-        ))
+        # The requirement handles spec strings, we just need to tell it
+        # whether it was an erroneous requirement.
+        return self.req.to_str(color=color, align=align, error=self.error)
 
     def status(self, color=False, location=False):
         """ Return a stringified status for this requirement. """
@@ -1208,7 +1220,7 @@ class StatusLine(object):
         if location:
             latest_colr = C(' ').join((
                 latest_colr,
-                self.location(color=True),
+                self.location(color=True, default='Not Installed'),
             ))
         if color:
             self.status_latest = str(latest_colr)
@@ -1220,7 +1232,7 @@ class StatusLine(object):
         if location:
             return C(' ').join(
                 self.status(color=color),
-                self.location(color=color)
+                self.location(color=color, default='Not Installed')
             )
         return self.status(color=color)
 
