@@ -15,7 +15,6 @@
 """
 
 # TODO: Figure out what to do with cvs or local requirements. -Cj
-import inspect
 import json
 import os
 import pip
@@ -24,7 +23,6 @@ import shutil
 import sys
 import traceback
 from collections import UserList
-from contextlib import suppress
 from functools import total_ordering
 from pkg_resources import parse_version
 from urllib.error import HTTPError
@@ -33,10 +31,16 @@ from urllib.request import urlopen
 from requirements.requirement import Requirement
 from colr import (
     auto_disable as colr_auto_disable,
+    disable as colr_disable,
     docopt,
     Colr as C
 )
 from fmtblock import FormatBlock
+from printdebug import DebugColrPrinter
+debugprinter = DebugColrPrinter()
+debugprinter.disable()
+debug = debugprinter.debug
+
 colr_auto_disable()
 
 
@@ -46,14 +50,17 @@ VERSIONSTR = '{} v. {}'.format(NAME, VERSION)
 SCRIPT = os.path.split(os.path.abspath(sys.argv[0]))[1]
 
 USAGESTR = """{versionstr}
+    Requirementz checks a requirements.txt package list against installed
+    packages or packages found on pypi. It can also show pypi's latest
+    information for a package.
+
     Usage:
-        {script} (-h | -v) [-D]
-        {script} [-c | -e] [-r] [-f file] [-D]
-        {script} [-d | -l | -a line... | (-s pat [-i])] [-f file] [-D]
-        {script} -C [-f file] [-D]
-        {script} -p [-L] [-D]
-        {script} -S [-f file] [-D]
-        {script} PACKAGE... [-D]
+        {script} (-h | -v) [-D] [-n]
+        {script} [-c | -C | -e] [-L | -r] [-f file] [-D] [-n]
+        {script} [-d | -l | -a line... | (-s pat [-i])] [-f file] [-D] [-n]
+        {script} -p [-L] [-D] [-n]
+        {script} -S [-f file] [-D] [-n]
+        {script} PACKAGE... [-D] [-n]
 
     Options:
         PACKAGE              : Show pypi info for packages.
@@ -70,7 +77,9 @@ USAGESTR = """{versionstr}
         -h,--help            : Show this help message.
         -i,--ignorecase      : Case insensitive when searching.
         -L,--location        : When listing, sort by location instead of name.
+                               When checking, show the package location.
         -l,--list            : List all requirements.
+        -n,--nocolor         : Force plain text, with no color codes.
         -p,--packages        : List all installed packages.
         -r,--requirement     : Print name and version requirement only for -c.
                                Useful for use with -e, to get a list of
@@ -93,6 +102,8 @@ USAGESTR = """{versionstr}
 
 # Handling this flag the old way for early access (before docopt arg parsing).
 DEBUG = ('-D' in sys.argv) or ('--debug' in sys.argv)
+if DEBUG:
+    debugprinter.enable()
 
 # Map from comparison operator to actual version comparison function.
 OP_FUNCS = {
@@ -123,6 +134,9 @@ def main(argd):
     """ Main entry point, expects doctopt arg dict as argd. """
     global DEBUG
     DEBUG = argd['--debug']
+    if argd['--nocolor']:
+        colr_disable()
+
     filename = argd['--file'] or os.path.join(os.getcwd(), DEFAULT_FILE)
 
     # May opt-in to create a file that doesn't exist.
@@ -135,7 +149,7 @@ def main(argd):
     elif argd['--list']:
         return list_requirements(filename)
     elif argd['--packages']:
-        return list_packages(by_location=argd['--location'])
+        return list_packages(location=argd['--location'])
     elif argd['--search']:
         return search_requirements(
             argd['--search'],
@@ -148,7 +162,8 @@ def main(argd):
             filename,
             errors_only=argd['--errors'],
             spec_only=argd['--requirement'],
-            latest=argd['--checklatest']
+            latest=argd['--checklatest'],
+            location=argd['--location'],
         )
     elif argd['--sort']:
         sort_requirements(filename)
@@ -208,7 +223,7 @@ def add_lines(filename, lines):
 
 def check_requirements(
         filename=DEFAULT_FILE,
-        errors_only=False, spec_only=False, latest=False):
+        errors_only=False, spec_only=False, latest=False, location=False):
     """ Check requirements against installed versions and print status lines
         for all of them.
     """
@@ -224,85 +239,12 @@ def check_requirements(
         if statusline.error:
             errs += 1
         if spec_only:
-            print(statusline.spec)
+            print(statusline.req.to_str(color=True, align=True))
         elif latest:
-            print(statusline.with_latest())
+            print(statusline.with_latest(color=True, location=location))
         else:
-            print(statusline)
+            print(statusline.to_str(color=True, location=location))
     return errs
-
-
-def debug(*args, **kwargs):
-    """ Print a message only if DEBUG is truthy. """
-    if not (DEBUG and args):
-        return None
-
-    # Use stderr by default.
-    if kwargs.get('file', None) is None:
-        kwargs['file'] = sys.stderr
-
-    # Include parent class name when given.
-    parent = kwargs.get('parent', None)
-    with suppress(KeyError):
-        kwargs.pop('parent')
-
-    # Go back more than once when given.
-    backlevel = kwargs.get('back', 1)
-    with suppress(KeyError):
-        kwargs.pop('back')
-
-    frame = inspect.currentframe()
-    # Go back a number of frames (usually 1).
-    while backlevel > 0:
-        if frame is None:
-            raise ValueError('`level` is too large, there is no frame.')
-        frame = frame.f_back
-        backlevel -= 1
-    if frame is None:
-        raise ValueError('`level` is too large, there is no frame.')
-    fname = os.path.split(frame.f_code.co_filename)[-1]
-    lineno = frame.f_lineno
-    if parent:
-        func = '{}.{}'.format(parent.__class__.__name__, frame.f_code.co_name)
-    else:
-        func = frame.f_code.co_name
-
-    # Use the colorized lineinfo for printing.
-    lineinfo = C('{}:{} {}: '.format(
-        C(fname, 'yellow'),
-        C(str(lineno).rjust(5), 'blue'),
-        C().join(C(func, 'magenta'), '()').rjust(25)
-    ))
-
-    # Are we omitting the line info, and just aligning with the end of it?
-    align = kwargs.get('align', False)
-    with suppress(KeyError):
-        kwargs.pop('align')
-
-    # An editable arg list, for patching.
-    pargs = list(C(a, 'green').str() for a in args)
-
-    # Is this a continuation from a previous line?
-    # Getting this for debug(), re-setting for print().
-    kwargs['end'] = kwargs.get('end', '\n')
-    willcontinue = (not kwargs['end'].endswith('\n'))
-    continued = debug.continued.get(kwargs['file'], False)
-    if align or continued:
-        debug.continued[kwargs['file']] = willcontinue
-        if align:
-            pargs[0] = ''.join((' ' * len(lineinfo.stripped()), pargs[0]))
-        print(*pargs, **kwargs)
-        return None
-    debug.continued[kwargs['file']] = willcontinue
-
-    # Patch args to stay compatible with print().
-    pargs[0] = ''.join((str(lineinfo), pargs[0]))
-    print(*pargs, **kwargs)
-
-
-# This dict tracks whether line info should be included, based on whether
-# the last line's `end` had a newline in it, per file descriptor.
-debug.continued = {}
 
 
 def file_ensure_exists(filename):
@@ -418,11 +360,11 @@ def list_duplicates(filename=DEFAULT_FILE):
     return sum(dupes.values())
 
 
-def list_packages(by_location=False):
+def list_packages(location=False):
     """ List all installed packages. """
     # Sort by name first.
     pkgs = sorted(PKGS)
-    if by_location:
+    if location:
         # Sort by location, but the name sort is kept.
         pkgs = sorted(pkgs, key=lambda p: PKGS[p].location)
     for pname in pkgs:
@@ -439,7 +381,7 @@ def list_requirements(filename=DEFAULT_FILE):
     reqs = Requirementz.from_file(filename=filename)
     print(
         '\n'.join(
-            r.to_str(color=True)
+            r.to_str(color=True, align=True)
             for r in sorted(reqs)
         )
     )
@@ -544,11 +486,11 @@ def show_package_info(packagename):
         ).join('(', ')', stysle='bright')
 
     pkgstr = '\n'.join((
-        '\n{name} {ver} {releasecnt}',
+        '\n{name:<30} {ver:<10} {releasecnt}',
         '    {summary}',
     )).format(
-        name=C(info['name'].ljust(30), 'blue'),
-        ver=C(info['version'].ljust(10), 'lightblue'),
+        name=C(info['name'], 'blue'),
+        ver=C(info['version'], 'lightblue'),
         releasecnt=releasecntstr,
         summary=C(
             FormatBlock(info['summary'].strip()).format(
@@ -562,7 +504,7 @@ def show_package_info(packagename):
     )
     label_color = 'blue'
     value_color = 'cyan'
-
+    subvalue_color = 'lightcyan'
     authorstr = ''
     if info['author'] and info['author'] not in ('UNKNOWN', ):
         authorstr = C(': ').join(
@@ -571,7 +513,10 @@ def show_package_info(packagename):
         )
     emailstr = ''
     if info['author_email'] and info['author_email'] not in ('UNKNOWN', ):
-        emailstr = C(info['author_email'], value_color).join('<', '>')
+        emailstr = C(
+            info['author_email'],
+            subvalue_color,
+        ).join('<', '>', style='bright')
 
     if authorstr or emailstr:
         pkgstr = '\n'.join((
@@ -784,7 +729,7 @@ class RequirementPlus(Requirement):
             )
         return ','.join('{} {}'.format(op, ver) for op, ver in self.specs)
 
-    def to_str(self, color=False):
+    def to_str(self, color=False, align=False):
         """ Like __str__, except colors can be used. """
         if self.local_file:
             if color:
@@ -829,7 +774,10 @@ class RequirementPlus(Requirement):
         else:
             extras = ''
         vers = self.spec_string(color=color)
-        name = '{:<25}'.format(C(self.name, 'blue') if color else self.name)
+        name = '{name:<{ljust}}'.format(
+            name=C(self.name, 'blue') if color else self.name,
+            ljust=25 if align else 0,
+        )
         return '{}{} {}'.format(name, extras, vers)
 
 
@@ -960,7 +908,9 @@ class SafeWriter(object):
         self.filename = filename
         self.mode = mode
         self.f = None
-        self.backed_up = False
+        # This will be set to the backed up file name, if one is made.
+        # On success, the backup is removed.
+        self.backup = None
 
     def __enter__(self):
         self.file_backup()
@@ -974,8 +924,12 @@ class SafeWriter(object):
         if extype is None:
             # No error occurred, safe to remove backup.
             self.file_backup_remove()
-        else:
-            print_err('A backup file was saved.')
+            return False
+        if self.backup:
+            print_err('A backup file was saved: {}'.format(self.backup))
+            return False
+        print_err('No backup was saved!')
+        return False
 
     def file_backup(self):
         """ Create a backup copy, in case something fails. """
@@ -991,9 +945,10 @@ class SafeWriter(object):
                 format_env_err(
                     filename=self.filename,
                     exc=ex,
-                    msg='Failed to backup')
+                    msg='Failed to backup'
+                )
             )
-        self.backed_up = True
+        self.backup = backupfile
         return None
 
     def file_backup_remove(self):
@@ -1035,9 +990,8 @@ class StatusLine(object):
                 break
         else:
             requiredver = req.spec_string()
-
-        self.spec = '{} {}'.format(req.name, requiredver)
-
+        self.spec_name = req.name
+        self.spec_ver = requiredver
         if installedver is None:
             # No version installed.
             installverstr = None
@@ -1060,25 +1014,65 @@ class StatusLine(object):
         verboseerr = C('Error', fore='red', style='bright')
         verboseok = C('Ok', fore='green')
         # Build status line.
-        s = '{verbose} {name} {installed} {status} {required}'
-        self.status = s.format(
-            verbose=(verboseerr if self.error else verboseok).ljust(5),
-            name=C(req.name, fore='blue').ljust(30),
-            installed=installverfmt.ljust(13),
+        colr_fmt = C(
+            '{verbose:<5} {name:<30} {installed:<13} {status} {required:<12}'
+        )
+        self.status_colr = colr_fmt.format(
+            verbose=verboseerr if self.error else verboseok,
+            name=C(req.name, fore='blue'),
+            installed=installverfmt,
             status=errstatus,
             required=C(
-                requiredver.ljust(12),
+                requiredver,
                 fore=('red' if self.error else 'green')
-            )
+            ),
         )
+        self.pkg = PKGS.get(self.req.name, None)
+        self.pkg_location = getattr(self.pkg, 'location', None)
 
-    def with_latest(self):
+    def __str__(self):
+        return self.to_str(color=False)
+
+    def location(self, color=False, default=''):
+        """ Return the location on disk for this requirement's package,
+            if installed. Otherwise return ''.
+        """
+        s = self.pkg_location or (default or '')
+        if color:
+            return str(C(s, 'yellow'))
+        return s
+
+    def spec(self, color=False):
+        """ Return self.spec if color is False, otherwise colorize self.spec
+            and return it.
+        """
+        if not color:
+            return '{} {}'.format(self.spec_name, self.spec_ver)
+        return str(C(' ').join(
+            C(self.spec_name, 'blue'),
+            C(self.spec_ver, 'cyan')
+        ))
+
+    def status(self, color=False, location=False):
+        """ Return a stringified status for this requirement. """
+        statusstr = str(
+            self.status_colr if color else self.status_colr.stripped()
+        )
+        if location:
+            return ' '.join((
+                statusstr,
+                self.location(color=color, default='Not Installed')
+            ))
+        return statusstr
+
+    def with_latest(self, color=False, location=False):
         """ Return this status line, with the latest available version
             appended. This connects to pypi to retrieve the latest.
             Possibly raises urllib.error.HTTPError, UnicodeDecodeError, and
             ValueError from `get_pypi_info()`.
         """
         if self.status_latest:
+            # Info is cached for this requirement, no need to contact pypi.
             return self.status_latest
 
         # Grab pypi info from python.org.
@@ -1106,20 +1100,35 @@ class StatusLine(object):
 
         # 256 color number for lightpurple.
         lightpurple = 63
-        self.status_latest = '{} {}'.format(
-            self.status,
+        latest_colr = C('{} {}').format(
+            # Location will be appended after the pypi info.
+            self.status(color=color, location=False),
             C(
-                '{} {}: {}'.format(
+                '{} {}: {:<10}'.format(
                     markerstr,
                     C('pypi', lightpurple),
                     C(self.pypi_info['info']['version'], fore=latest_color),
                 )
             )
         )
+        if location:
+            latest_colr = C(' ').join((
+                latest_colr,
+                self.location(color=True),
+            ))
+        if color:
+            self.status_latest = str(latest_colr)
+        else:
+            self.status_latest = str(latest_colr.stripped())
         return self.status_latest
 
-    def __str__(self):
-        return self.status
+    def to_str(self, color=False, location=False):
+        if location:
+            return C(' ').join(
+                self.status(color=color),
+                self.location(color=color)
+            )
+        return self.status(color=color)
 
 
 # Global {package_name: package} dict.
