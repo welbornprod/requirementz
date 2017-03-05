@@ -25,6 +25,7 @@ import sys
 import traceback
 from collections import UserList
 from contextlib import suppress
+from functools import total_ordering
 from pkg_resources import parse_version
 from urllib.error import HTTPError
 from urllib.request import urlopen
@@ -410,8 +411,8 @@ def list_duplicates(filename=DEFAULT_FILE):
     ))
     for req, dupcount in dupes.items():
         print('{name:>30} has {num} {plural}'.format(
-            name=req.name,
-            num=dupcount,
+            name=C(req.name, 'blue'),
+            num=C(dupcount, 'blue', style='bright'),
             plural='duplicate' if dupcount == 1 else 'duplicates'
         ))
     return sum(dupes.values())
@@ -436,7 +437,12 @@ def list_packages(by_location=False):
 def list_requirements(filename=DEFAULT_FILE):
     """ Lists current requirements. """
     reqs = Requirementz.from_file(filename=filename)
-    print('\n'.join(str(r) for r in reqs))
+    print(
+        '\n'.join(
+            r.to_str(color=True)
+            for r in sorted(reqs)
+        )
+    )
 
 
 def load_packages(local_only=False):
@@ -638,6 +644,7 @@ class FatalError(EnvironmentError):
         return self.msg
 
 
+@total_ordering
 class RequirementPlus(Requirement):
     """ A requirements.requirement.Requirement with extra helper methods.
     """
@@ -658,6 +665,25 @@ class RequirementPlus(Requirement):
         """ hash() implementation for RequirementPlus. """
         return hash(str(self))
 
+    def __lt__(self, other):
+        nothing = object()
+        othername = getattr(other, 'name', nothing)
+        if othername is nothing:
+            return False
+        if not (self.name < othername):
+            return False
+
+        otherspecs = getattr(other, 'specs', nothing)
+        try:
+            specslt = self.specs < otherspecs
+        except TypeError:
+            if self.specs:
+                # Other has no specs.
+                return False
+            # Self has no specs.
+            return bool(other.specs)
+        return specslt
+
     def __repr__(self):
         return str(self)
 
@@ -665,18 +691,7 @@ class RequirementPlus(Requirement):
         """ String representation of a RequirementPlus, which is compatible
             with a requirements.txt line.
         """
-        if self.local_file:
-            return ' '.join(('-e', self.path))
-        elif self.vcs:
-            hashstr = '#egg={}'.format(self.name)
-            url = '@'.join((self.uri, self.revision))
-            spec = ''.join((url, hashstr))
-            return ' '.join(('-e', spec))
-
-        # Normal pip package.
-        extras = '[{}]'.format(', '.join(self.extras)) if self.extras else ''
-        vers = self.spec_string()
-        return '{}{} {}'.format(self.name, extras, vers)
+        return self.to_str(color=False)
 
     @staticmethod
     def compare_versions(ver1, op, ver2):
@@ -754,10 +769,68 @@ class RequirementPlus(Requirement):
                     return True
         return False
 
-    def spec_string(self):
+    def spec_string(self, color=False):
         """ Just the spec string ('>= 1.0.0, <= 2.0.0') from this requirement.
         """
+        if color:
+            return str(
+                C(',').join(
+                    C(' ').join(
+                        C(op),
+                        C(ver, 'cyan'),
+                    )
+                    for op, ver in self.specs
+                )
+            )
         return ','.join('{} {}'.format(op, ver) for op, ver in self.specs)
+
+    def to_str(self, color=False):
+        """ Like __str__, except colors can be used. """
+        if self.local_file:
+            if color:
+                return str(C(' ').join(
+                    C('-e', 'cyan'),
+                    C(self.path, 'green'),
+                ))
+            return ' '.join(('-e', self.path))
+        elif self.vcs:
+            if color:
+                hashstr = str(
+                    C('=').join(C('#egg', 'lightblue'), C(self.name, 'green'))
+                )
+            else:
+                hashstr = '#egg={}'.format(self.name)
+            if color:
+                url = str(
+                    C('@').join(
+                        C(self.uri, 'blue'),
+                        C(self.revision, 'yellow'),
+                    )
+                )
+            else:
+                url = '@'.join((self.uri, self.revision))
+            spec = ''.join((url, hashstr))
+            if color:
+                return C(' ').join(
+                    C('-e', 'cyan'),
+                    spec,
+                )
+            return ' '.join(('-e', spec))
+
+        # Normal pip package.
+        if self.extras:
+            if color:
+                extras = C(', ').join(
+                    C(e, 'cyan')
+                    for e in self.extras
+                ).join('[', ']', style='bright')
+            else:
+                extras = '[{}]'.format(', '.join(self.extras))
+        else:
+            extras = ''
+        vers = self.spec_string(color=color)
+        name = '{:<25}'.format(C(self.name, 'blue') if color else self.name)
+        return '{}{} {}'.format(name, extras, vers)
 
 
 class Requirementz(UserList):
