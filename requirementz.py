@@ -59,11 +59,11 @@ USAGESTR = """{versionstr}
         {script} [-c | -C | -e] [-L | -r] [-f file] [-D] [-n]
         {script} [-d | -l | -a line... | (-s pat [-i])] [-f file] [-D] [-n]
         {script} -p [-L] [-D] [-n]
-        {script} -S [-f file] [-D] [-n]
+        {script} (-P | -S) [-f file] [-D] [-n]
         {script} PACKAGE... [-D] [-n]
 
     Options:
-        PACKAGE              : Show pypi info for packages.
+        PACKAGE              : Show pypi info for package names.
         -a line,--add line   : Add a requirement line to the file.
                                The -a flag can be used multiple times.
         -C,--checklatest     : Check installed packages and latest versions
@@ -80,6 +80,8 @@ USAGESTR = """{versionstr}
                                When checking, show the package location.
         -l,--list            : List all requirements.
         -n,--nocolor         : Force plain text, with no color codes.
+        -P,--pypi            : Show pypi info for all packages in
+                               requirements.txt.
         -p,--packages        : List all installed packages.
         -r,--requirement     : Print name and version requirement only for -c.
                                Useful for use with -e, to get a list of
@@ -165,6 +167,8 @@ def main(argd):
             latest=argd['--checklatest'],
             location=argd['--location'],
         )
+    elif argd['--pypi']:
+        return show_package_infos(get_requirement_names(filename))
     elif argd['--sort']:
         sort_requirements(filename)
         print('Sorted requirements file: {}'.format(filename))
@@ -335,6 +339,12 @@ def get_pypi_release_dls(releases):
         for ver in releases
         for verinfo in releases[ver]
     )
+
+
+def get_requirement_names(filename=DEFAULT_FILE):
+    """ Return an iterable of requirement names from a requirements.txt. """
+    reqs = Requirementz.from_file(filename=filename)
+    return sorted(r.name for r in reqs)
 
 
 def list_duplicates(filename=DEFAULT_FILE):
