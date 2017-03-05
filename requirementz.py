@@ -40,16 +40,17 @@ colr_auto_disable()
 
 
 NAME = 'Requirementz'
-VERSION = '0.2.2'
+VERSION = '0.2.3'
 VERSIONSTR = '{} v. {}'.format(NAME, VERSION)
 SCRIPT = os.path.split(os.path.abspath(sys.argv[0]))[1]
 
 USAGESTR = """{versionstr}
     Usage:
-        {script} (-h | -p | -v) [-D]
+        {script} (-h | -v) [-D]
         {script} [-c | -e] [-r] [-f file] [-D]
         {script} [-d | -l | -a line... | (-s pat [-i])] [-f file] [-D]
-        {script} -L [-f file] [-D]
+        {script} -C [-f file] [-D]
+        {script} -p [-L] [-D]
         {script} -S [-f file] [-D]
         {script} PACKAGE... [-D]
 
@@ -57,6 +58,8 @@ USAGESTR = """{versionstr}
         PACKAGE              : Show pypi info for packages.
         -a line,--add line   : Add a requirement line to the file.
                                The -a flag can be used multiple times.
+        -C,--checklatest     : Check installed packages and latest versions
+                               from PyPi against requirements.
         -c,--check           : Check installed packages against requirements.
         -D,--debug           : Print some debug info while running.
         -d,--duplicates      : List any duplicate entries.
@@ -65,8 +68,7 @@ USAGESTR = """{versionstr}
                                Default: ./requirements.txt
         -h,--help            : Show this help message.
         -i,--ignorecase      : Case insensitive when searching.
-        -L,--checklatest     : Check installed packages and latest versions
-                               from PyPi against requirements.
+        -L,--location        : When listing, sort by location instead of name.
         -l,--list            : List all requirements.
         -p,--packages        : List all installed packages.
         -r,--requirement     : Print name and version requirement only for -c.
@@ -132,7 +134,7 @@ def main(argd):
     elif argd['--list']:
         return list_requirements(filename)
     elif argd['--packages']:
-        return list_packages()
+        return list_packages(by_location=argd['--location'])
     elif argd['--search']:
         return search_requirements(
             argd['--search'],
@@ -415,14 +417,20 @@ def list_duplicates(filename=DEFAULT_FILE):
     return sum(dupes.values())
 
 
-def list_packages():
+def list_packages(by_location=False):
     """ List all installed packages. """
-    for pname in sorted(PKGS):
+    # Sort by name first.
+    pkgs = sorted(PKGS)
+    if by_location:
+        # Sort by location, but the name sort is kept.
+        pkgs = sorted(pkgs, key=lambda p: PKGS[p].location)
+    for pname in pkgs:
         p = PKGS[pname]
-        print('{:<30} v. {:<8} {}'.format(
-            p.project_name,
-            pkg_installed_version(pname),
-            p.location))
+        print('{:<30} v. {:<12} {}'.format(
+            C(p.project_name, fore='blue'),
+            C(pkg_installed_version(pname), fore='cyan'),
+            C(p.location, fore='green'),
+        ))
 
 
 def list_requirements(filename=DEFAULT_FILE):
@@ -527,24 +535,24 @@ def show_package_info(packagename):
             C('+', 'yellow'),
             C(otherreleasecnt, 'blue', style='bright'),
             C(' releases', 'yellow')
-        ).join('(', ')', style='bright')
+        ).join('(', ')', stysle='bright')
 
     pkgstr = '\n'.join((
         '\n{name} {ver} {releasecnt}',
         '    {summary}',
     )).format(
-            name=C(info['name'].ljust(30), 'blue'),
-            ver=C(info['version'].ljust(10), 'lightblue'),
-            releasecnt=releasecntstr,
-            summary=C(
-                FormatBlock(info['summary'].strip()).format(
-                    width=76,
-                    newlines=True,
-                    prepend='    ',
-                    strip_first=True,
-                ),
-                'cyan'
+        name=C(info['name'].ljust(30), 'blue'),
+        ver=C(info['version'].ljust(10), 'lightblue'),
+        releasecnt=releasecntstr,
+        summary=C(
+            FormatBlock(info['summary'].strip()).format(
+                width=76,
+                newlines=True,
+                prepend='    ',
+                strip_first=True,
             ),
+            'cyan'
+        ),
     )
     label_color = 'blue'
     value_color = 'cyan'
