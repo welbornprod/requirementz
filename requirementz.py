@@ -45,21 +45,23 @@ colr_auto_disable()
 
 
 NAME = 'Requirementz'
-VERSION = '0.2.3'
+VERSION = '0.3.0'
 VERSIONSTR = '{} v. {}'.format(NAME, VERSION)
 SCRIPT = os.path.split(os.path.abspath(sys.argv[0]))[1]
 
 USAGESTR = """{versionstr}
+
     Requirementz checks a requirements.txt package list against installed
     packages or packages found on pypi. It can also show pypi's latest
-    information for a package.
+    information for a package, or sort a requirements.txt.
 
     Usage:
         {script} (-h | -v) [-D] [-n]
-        {script} [-c | -C | -e] [-L | -r] [-f file] [-D] [-n]
-        {script} [-d | -l | -a line... | (-s pat [-i])] [-f file] [-D] [-n]
-        {script} -p [-L] [-D] [-n]
+        {script} [-c | -C | -e | -l] [-L | -r] [-f file] [-D] [-n]
+        {script} [-a line... | -d] [-f file] [-D] [-n]
         {script} (-P | -S) [-f file] [-D] [-n]
+        {script} -p [-L] [-D] [-n]
+        {script} -s pat [-i] [-f file] [-D] [-n]
         {script} PACKAGE... [-D] [-n]
 
     Options:
@@ -131,6 +133,9 @@ FILE_ERRS = {
 # Operates on ./requirements.txt by default.
 DEFAULT_FILE = 'requirements.txt'
 
+# 256 color for light purple.
+LIGHTPURPLE = 63
+
 
 def main(argd):
     """ Main entry point, expects doctopt arg dict as argd. """
@@ -149,7 +154,7 @@ def main(argd):
     if argd['--duplicates']:
         return list_duplicates(filename)
     elif argd['--list']:
-        return list_requirements(filename)
+        return list_requirements(filename, location=argd['--location'])
     elif argd['--packages']:
         return list_packages(location=argd['--location'])
     elif argd['--search']:
@@ -182,6 +187,7 @@ def main(argd):
         errors_only=argd['--errors'],
         spec_only=argd['--requirement'],
         latest=argd['--checklatest'],
+        location=argd['--location'],
     )
 
 
@@ -249,6 +255,24 @@ def check_requirements(
         else:
             print(statusline.to_str(color=True, location=location))
     return errs
+
+
+def colr_name(name, **kwargs):
+    """ Colorize a name (str). This function is used for consistency.
+        Any kwargs are passed on to Colr.
+    """
+    return C(
+        name,
+        LIGHTPURPLE if is_local_pkg(name) else 'blue',
+        **kwargs
+    )
+
+
+def colr_num(num, **kwargs):
+    """ Colorize a number. This function is used for consistency.
+        Any kwargs are passed on to Colr.
+    """
+    return C(num, 'blue', **kwargs)
 
 
 def file_ensure_exists(filename):
@@ -347,6 +371,17 @@ def get_requirement_names(filename=DEFAULT_FILE):
     return sorted(r.name for r in reqs)
 
 
+def is_local_pkg(name):
+    """ Returns True if the package name is installed somewhere in /home.
+    """
+    pkg = PKGS.get(name.lower().strip(), None)
+    if pkg is None:
+        return False
+    if not pkg.location:
+        return False
+    return pkg.location.startswith('/home')
+
+
 def list_duplicates(filename=DEFAULT_FILE):
     """ Print any duplicate package names found in the file.
         Returns the number of duplicates found.
@@ -363,8 +398,8 @@ def list_duplicates(filename=DEFAULT_FILE):
     ))
     for req, dupcount in dupes.items():
         print('{name:>30} has {num} {plural}'.format(
-            name=C(req.name, 'blue'),
-            num=C(dupcount, 'blue', style='bright'),
+            name=colr_name(req.name),
+            num=colr_num(dupcount, style='bright'),
             plural='duplicate' if dupcount == 1 else 'duplicates'
         ))
     return sum(dupes.values())
@@ -380,21 +415,18 @@ def list_packages(location=False):
     for pname in pkgs:
         p = PKGS[pname]
         print('{:<30} v. {:<12} {}'.format(
-            C(p.project_name, fore='blue'),
+            colr_name(p.project_name),
             C(pkg_installed_version(pname), fore='cyan'),
             C(p.location, fore='green'),
         ))
 
 
-def list_requirements(filename=DEFAULT_FILE):
+def list_requirements(filename=DEFAULT_FILE, location=False):
     """ Lists current requirements. """
     reqs = Requirementz.from_file(filename=filename)
-    print(
-        '\n'.join(
-            r.to_str(color=True, align=True)
-            for r in sorted(reqs)
-        )
-    )
+    print('\n'.join(
+        reqs.iter_str(color=True, align=True, location=location)
+    ))
 
 
 def load_packages(local_only=False):
@@ -491,7 +523,7 @@ def show_package_info(packagename):
     if otherreleasecnt:
         releasecntstr = C('').join(
             C('+', 'yellow'),
-            C(otherreleasecnt, 'blue', style='bright'),
+            colr_num(otherreleasecnt, style='bright'),
             C(' releases', 'yellow')
         ).join('(', ')', stysle='bright')
 
@@ -499,7 +531,7 @@ def show_package_info(packagename):
         '\n{name:<30} {ver:<10} {releasecnt}',
         '    {summary}',
     )).format(
-        name=C(info['name'], 'blue'),
+        name=colr_name(info['name']),
         ver=C(info['version'], 'lightblue'),
         releasecnt=releasecntstr,
         summary=C(
@@ -563,10 +595,10 @@ def show_package_info(packagename):
                 C(latestrelease, value_color)
             ),
             C('').join(
-                C(latestdls, 'blue'),
+                colr_num(latestdls),
                 C(' dls', 'green'),
                 ', ',
-                C(alldls, 'blue'),
+                colr_num(alldls),
                 C(' for all versions', 'green'),
             ).join('(', ')'),
         )
@@ -607,6 +639,9 @@ class FatalError(EnvironmentError):
 class RequirementPlus(Requirement):
     """ A requirements.requirement.Requirement with extra helper methods.
     """
+    name_width = 25
+    ver_width = 16
+
     def __init__(self, line):
         # Requirement asks that you do not call __init__ directly,
         # but use the parse* class methods (requirement.py:128).
@@ -650,7 +685,7 @@ class RequirementPlus(Requirement):
         """ String representation of a RequirementPlus, which is compatible
             with a requirements.txt line.
         """
-        return self.to_str(color=False)
+        return self.to_str(color=False, align=False, location=False)
 
     @staticmethod
     def compare_versions(ver1, op, ver2):
@@ -698,6 +733,20 @@ class RequirementPlus(Requirement):
         )
         return self._installed_ver
 
+    def location(self, color=False, default=''):
+        """ Returns the location of any installed version for this
+            requirement. If the package is not installed, then `default`
+            is returned.
+        """
+        p = PKGS.get(self.name.lower(), None)
+        if p is None:
+            loc = default or ''
+        else:
+            loc = p.location or (default or '')
+        if color:
+            return str(C(loc, 'yellow'))
+        return loc
+
     def satisfied(self, against=None):
         """ Return True if this requirement is satisfied by the installed
             version. Non-installed packages never satisfy the requirement.
@@ -728,7 +777,7 @@ class RequirementPlus(Requirement):
                     return True
         return False
 
-    def spec_string(self, color=False):
+    def spec_string(self, color=False, ljust=None):
         """ Just the spec string ('>= 1.0.0, <= 2.0.0') from this requirement.
         """
         if color:
@@ -739,11 +788,14 @@ class RequirementPlus(Requirement):
                         C(ver, 'cyan'),
                     )
                     for op, ver in self.specs
-                )
+                ).ljust(ljust or 0)
             )
-        return ','.join('{} {}'.format(op, ver) for op, ver in self.specs)
+        return ','.join(
+            '{} {}'.format(op, ver)
+            for op, ver in self.specs
+        ).ljust(ljust or 0)
 
-    def to_str(self, color=False, align=False):
+    def to_str(self, color=False, align=False, location=False):
         """ Like __str__, except colors can be used. """
         if self.local_file:
             if color:
@@ -787,12 +839,27 @@ class RequirementPlus(Requirement):
                 extras = '[{}]'.format(', '.join(self.extras))
         else:
             extras = ''
-        vers = self.spec_string(color=color)
-        name = '{name:<{ljust}}'.format(
-            name=C(self.name, 'blue') if color else self.name,
-            ljust=25 if align else 0,
+
+        namefmt = '{name:<{ljust}}'.format(
+            name=C('').join(
+                colr_name(self.name) if color else self.name,
+                extras,
+            ),
+            ljust=self.name_width if align else 0,
         )
-        return '{}{} {}'.format(name, extras, vers)
+        s = '{name} {ver}'.format(
+            name=namefmt,
+            ver=self.spec_string(
+                color=color,
+                ljust=self.ver_width if align else 0
+            ),
+        )
+        if location:
+            s = ' '.join((
+                s,
+                self.location(color=color),
+            ))
+        return s
 
 
 class Requirementz(UserList):
@@ -880,6 +947,21 @@ class Requirementz(UserList):
             if r.name == name:
                 return r
         return None
+
+    def iter_str(self, color=False, align=False, location=False):
+        """ Yields req.to_str() for each RequirementPlus in this list.
+            The keyword arguments are passed on to RequirementPlus.to_str().
+            Alignment/justification is calculated before iterating.
+        """
+        max_name = len(max(self, key=lambda req: len(req.name)).name)
+        max_ver = len(
+            max(self, key=lambda req: len(req.spec_string(color=False)))
+            .spec_string(color=False)
+        )
+        for req in sorted(self, key=lambda req: req.name):
+            req.name_width = max_name
+            req.ver_width = max_ver
+            yield req.to_str(color=color, align=align, location=location)
 
     def names(self):
         """ Return a tuple of names only from these RequirementPluses. """
@@ -1033,7 +1115,7 @@ class StatusLine(object):
         )
         self.status_colr = colr_fmt.format(
             verbose=verboseerr if self.error else verboseok,
-            name=C(req.name, fore='blue'),
+            name=colr_name(req.name),
             installed=installverfmt,
             status=errstatus,
             required=C(
@@ -1041,7 +1123,7 @@ class StatusLine(object):
                 fore=('red' if self.error else 'green')
             ),
         )
-        self.pkg = PKGS.get(self.req.name, None)
+        self.pkg = PKGS.get(self.req.name.lower(), None)
         self.pkg_location = getattr(self.pkg, 'location', None)
 
     def __str__(self):
@@ -1063,7 +1145,7 @@ class StatusLine(object):
         if not color:
             return '{} {}'.format(self.spec_name, self.spec_ver)
         return str(C(' ').join(
-            C(self.spec_name, 'blue'),
+            colr_name(self.spec_name),
             C(self.spec_ver, 'cyan')
         ))
 
@@ -1112,15 +1194,13 @@ class StatusLine(object):
             latest_color = 'red'
             markerstr = C('!', 'red', style='bright')
 
-        # 256 color number for lightpurple.
-        lightpurple = 63
         latest_colr = C('{} {}').format(
             # Location will be appended after the pypi info.
             self.status(color=color, location=False),
             C(
                 '{} {}: {:<10}'.format(
                     markerstr,
-                    C('pypi', lightpurple),
+                    C('pypi', LIGHTPURPLE),
                     C(self.pypi_info['info']['version'], fore=latest_color),
                 )
             )
