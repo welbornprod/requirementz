@@ -14,11 +14,15 @@ from urllib.error import HTTPError
 from urllib.request import urlopen
 
 from requirementz import (
+    __version__,
     RequirementPlus,
     Requirementz,
     StatusLine,
     sort_requirements,
 )
+
+print('Testing requirementz v. {}...'.format(__version__))
+
 compare_versions = RequirementPlus.compare_versions
 
 
@@ -233,23 +237,12 @@ class StatusLineTests(unittest.TestCase):
         # Ensure failure for obviously bad package.
         name = 'THERE_IS_NO_PACKAGE_WITH_THIS_NAME'
         req = RequirementPlus.parse(name)
-        try:
-            StatusLine(req).with_latest()
-        except HTTPError as ex:
-            if ex.code == 404:
-                # This is what we expected.
-                return
-            else:
-                self.fail(
-                    'PyPi returned unexpected error number: {}\n{}'.format(
-                        ex.errno,
-                        ex
-                    )
-                )
-        else:
-            self.fail(
-                'Should have failed for bad package name: {}'.format(name)
-            )
+        s = StatusLine(req).with_latest()
+        self.assertIn(
+            '?',
+            s,
+            msg='Bad package name should have showed a question mark.'
+        )
 
 
 if __name__ == '__main__':
