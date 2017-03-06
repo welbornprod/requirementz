@@ -25,7 +25,7 @@ debugprinter = DebugColrPrinter()
 debugprinter.disable()
 debug = debugprinter.debug
 
-__version__ = '0.3.1'
+__version__ = '0.3.2'
 
 # Operates on ./requirements.txt by default.
 DEFAULT_FILE = 'requirements.txt'

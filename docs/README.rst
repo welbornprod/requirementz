@@ -99,7 +99,12 @@ Check ``requirements.txt`` against installed package versions.
     requirementz
 
 Here you can see that the ``colr >= 0.7.6`` requirement was not
-satisfied, because ``0.7.5`` is installed: |Output|
+satisfied, because ``0.7.5`` is installed:
+
+.. figure:: http://imgur.com/nbzLv7X.png
+   :alt: Output
+
+   Output
 
 Show package location while checking:
 
@@ -188,7 +193,4 @@ Contributions
 
 File an issue or create a pull request. Contributions are welcome.
 
-`github.com/welbornprod/requirementz <https://github.com/welbornprod/requirementz>`__
-
-.. |Output| image:: http://imgur.com/nbzLv7X.png
-
+https://github.com/welbornprod/requirementz

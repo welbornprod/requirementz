@@ -86,6 +86,7 @@ requirementz
 ```
 
 Here you can see that the `colr >= 0.7.6` requirement was not satisfied, because `0.7.5` is installed:
+
 ![Output](http://imgur.com/nbzLv7X.png)
 
 Show package location while checking:
@@ -146,4 +147,4 @@ that area would be appreciated, as I haven't had to use those requirement types.
 
 File an issue or create a pull request. Contributions are welcome.
 
-[github.com/welbornprod/requirementz](https://github.com/welbornprod/requirementz)
+https://github.com/welbornprod/requirementz
