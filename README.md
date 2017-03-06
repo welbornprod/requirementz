@@ -19,6 +19,20 @@ pip install requirementz
 
 The command is called `requirementz`.
 
+## Dependencies
+
+Requirementz has several python dependencies, all installable with `pip`.
+A `requirements.txt` is provided, for easy installation.
+
+* [colr](https://github.com/welbornprod/colr) - Terminal colors.
+* [docopt](https://github.com/docopt/docopt) - Argument parsing.
+* [formatblock](https://github.com/welbornprod/fmtblock) - Text wrapping (like `textwrap`).
+* [printdebug](https://github.com/welbornprod/printdebug) - Easily disabled debug printing.
+* [requirements-parser](https://github.com/davidfischer/requirements-parser) - Parses `requirements.txt`.
+
+If you've cloned the repo, you can run `pip install -r requirements.txt` to install all of them. Otherwise, `pip install requirementz`
+should install all dependencies for you.
+
 ## Usage
 
 ```
