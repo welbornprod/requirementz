@@ -52,7 +52,7 @@ else:
 
 setup(
     name='Requirementz',
-    version='0.3.0',
+    version='0.3.1',
     author='Christopher Welborn',
     author_email='cj@welbornprod.com',
     packages=['requirementz'],

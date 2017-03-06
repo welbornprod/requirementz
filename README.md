@@ -10,6 +10,15 @@
 
 * Finds duplicate entries in `requirements.txt`.
 
+## Installation
+
+This tool is installable with `pip`:
+```bash
+pip install requirementz
+```
+
+The command is called `requirementz`.
+
 ## Usage
 
 ```
