@@ -142,4 +142,8 @@ requirementz -d
 This hasn't been tested very well with CVS or local requirements. Any help in
 that area would be appreciated, as I haven't had to use those requirement types.
 
+## Contributions
+
 File an issue or create a pull request. Contributions are welcome.
+
+[github.com/welbornprod/requirementz](https://github.com/welbornprod/requirementz)
