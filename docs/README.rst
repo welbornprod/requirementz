@@ -24,6 +24,25 @@ This tool is installable with ``pip``:
 
 The command is called ``requirementz``.
 
+Dependencies
+------------
+
+Requirementz has several python dependencies, all installable with
+``pip``. A ``requirements.txt`` is provided, for easy installation.
+
+-  `colr <https://github.com/welbornprod/colr>`__ - Terminal colors.
+-  `docopt <https://github.com/docopt/docopt>`__ - Argument parsing.
+-  `formatblock <https://github.com/welbornprod/fmtblock>`__ - Text
+   wrapping (like ``textwrap``).
+-  `printdebug <https://github.com/welbornprod/printdebug>`__ - Easily
+   disabled debug printing.
+-  `requirements-parser <https://github.com/davidfischer/requirements-parser>`__
+   - Parses ``requirements.txt``.
+
+If you've cloned the repo, you can run
+``pip install -r requirements.txt`` to install all of them. Otherwise,
+``pip install requirementz`` should install all dependencies for you.
+
 Usage
 -----
 
@@ -164,7 +183,12 @@ This hasn't been tested very well with CVS or local requirements. Any
 help in that area would be appreciated, as I haven't had to use those
 requirement types.
 
+Contributions
+-------------
+
 File an issue or create a pull request. Contributions are welcome.
+
+`github.com/welbornprod/requirementz <https://github.com/welbornprod/requirementz>`__
 
 .. |Output| image:: http://imgur.com/nbzLv7X.png
 
