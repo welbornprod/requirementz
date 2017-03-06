@@ -2,13 +2,15 @@
 # -*- coding: utf-8 -*-
 
 """ requirementz.py
-    Check requirements.txt against installed packages using pip and
+    Check requirements.txt against installed/latest packages using pip and
     requirements-parser.
     Bonus features:
-    Check for duplicate entries, search for entries using regex,
-    add requirement lines,
-    and list requirements or all installed packages (both formatted
-    for readability).
+      Check for duplicate entries
+      Search for entries using regex.
+      Add requirement lines.
+      List requirements or all installed packages (formatted for readability).
+      View package info from PyPi.
+      Sort the requirements file.
 
     This is for Python 3 only.
     -Christopher Welborn 07-19-2015
@@ -207,14 +209,14 @@ def add_lines(filename, lines):
         try:
             req = RequirementPlus.parse(line)
         except ValueError as ex:
-            print_err('Invalid requirement spec.: {}'.format(line))
+            print_err('Invalid requirement spec.', value=line)
             return 1
 
         try:
             if reqs.add_line(line):
-                msg = 'Added requirement: {}'.format(req)
+                msg = colr_label('Added requirement', req)
             else:
-                msg = 'Replaced requirement with: {}'.format(req)
+                msg = colr_label('Replaced requirement with', req)
         except ValueError as ex:
             raise FatalError(str(ex))
         else:
@@ -230,7 +232,7 @@ def add_lines(filename, lines):
                 msg='Failed to write file'
             )
         )
-    print('\n'.join(msgs))
+    print(C('\n').join(msgs))
     return 0
 
 
@@ -260,6 +262,13 @@ def check_requirements(
     return errs
 
 
+def colr_label(label, value, **kwargs):
+    """ Colorize a label/value pair.
+        Any kwargs are passed on to colr for the value.
+    """
+    return C(': ').join(C(label, 'cyan'), C(value, 'blue', **kwargs))
+
+
 def colr_name(name, **kwargs):
     """ Colorize a name (str). This function is used for consistency.
         Any kwargs are passed on to Colr.
@@ -282,6 +291,30 @@ def colr_num(num, **kwargs):
     return C(num, 'blue', **kwargs)
 
 
+def confirm(s, default=False):
+    """ Confirm a yes/no question. """
+    if default:
+        defaultstr = C('/', style='bright').join(
+            C('Y', 'green'),
+            C('n', 'red')
+        )
+    else:
+        defaultstr = C('/', style='bright').join(
+            C('y', 'green'),
+            C('N', 'red')
+        )
+    s = '{} ({}): '.format(C(s, 'cyan'), defaultstr)
+    try:
+        answer = input(s).strip().lower()
+    except EOFError:
+        raise UserCancelled()
+    if answer:
+        return answer.startswith('y')
+
+    # no answer, return the default.
+    return default
+
+
 def file_ensure_exists(filename):
     """ Confirm that a requirements.txt exists, create one if the USAGESTR
         wants to. If none exists, and the user does not want to create one,
@@ -292,11 +325,9 @@ def file_ensure_exists(filename):
         debug('File exists: {}'.format(filename))
         return True
 
-    print('\nThis file doesn\'t exist yet: {}'.format(filename))
-    ans = input('Would you like to create it? (y/N): ').strip().lower()
-    if not ans.startswith('y'):
-        print('\nUser cancelled.')
-        return False
+    print_err(colr_label('\nThis file doesn\'t exist yet', filename))
+    if not confirm('Create it?'):
+        raise UserCancelled()
 
     try:
         with open(filename, 'w'):
@@ -315,11 +346,14 @@ def format_env_err(**kwargs):
         raise ValueError('`exc` is a required kwarg.')
     filename = kwargs.get('filename', getattr(exc, 'filename', ''))
     msg = kwargs.get('msg', 'Error with file')
-    return '\n{}'.format(
-        FILE_ERRS.get(getattr(exc, 'errno', None)).format(
-            filename=filename,
-            exc=exc,
-            msg=msg
+    return C('\n{}').format(
+        C(
+            FILE_ERRS.get(getattr(exc, 'errno', None)).format(
+                filename=C(filename, 'blue'),
+                exc=C(exc, 'red', style='bright'),
+                msg=C(msg, 'red'),
+            ),
+            'red',
         )
     )
 
@@ -329,10 +363,13 @@ def get_pypi_info(packagename):
     try:
         con = urlopen(url)
     except HTTPError as excon:
-        excon.msg = '\n'.join((
-            'Unable to connect to get info for: {}'.format(url),
-            excon.msg
-        ))
+        if excon.code == 404:
+            excon.msg = 'No package found for: {}'.format(packagename)
+        else:
+            excon.msg = '\n'.join((
+                'Unable to connect to get info for: {}'.format(url),
+                excon.msg
+            ))
         raise excon
     else:
         try:
@@ -481,10 +518,28 @@ def print_err(*args, **kwargs):
     """ Print a message to stderr by default. """
     if kwargs.get('file', None) is None:
         kwargs['file'] = sys.stderr
-    print(
-        C(kwargs.get('sep', ' ').join(str(a) for a in args), 'red'),
-        **kwargs
+    nothing = object()
+    value = nothing
+    with suppress(KeyError):
+        value = kwargs.pop('value')
+    error = nothing
+    with suppress(KeyError):
+        error = kwargs.pop('error')
+
+    msg = kwargs.get('sep', ' ').join(
+        str(a) if isinstance(a, C) else str(C(a, 'red'))
+        for a in args
     )
+    if (value is nothing) and (error is nothing):
+        print(msg, **kwargs)
+        return None
+    # Label/value pair.
+    if value is not nothing:
+        msg = C(': ').join(msg, C(value, 'blue'))
+    if error is not nothing:
+        msg = C('\n  ').join(msg, C(error, 'red', style='bright'))
+    print(msg, **kwargs)
+    return None
 
 
 def search_requirements(
@@ -493,20 +548,26 @@ def search_requirements(
         results as they are found.
         Returns the number of results found.
     """
-    found = 0
     reqs = Requirementz.from_file(filename=filename)
     try:
-        for req in reqs.search(pattern, ignorecase=ignorecase):
-            found += 1
-            print(req)
+        found = Requirementz(
+            requirements=reqs.search(pattern, ignorecase=ignorecase)
+        )
     except re.error as ex:
-        print('\nInvalid regex pattern: {}\n{}'.format(pattern, ex))
+        print_err('\nInvalid regex pattern', value=pattern, error=ex)
+        return 1
+    total = len(found)
+    if not total:
+        print_err('\nNo entries found with', value=pattern)
         return 1
 
-    print('\nFound {} {}.'.format(
-        found,
-        'entry' if found == 1 else 'entries'))
-    return 0 if found > 0 else 1
+    print('\n'.join(found.iter_str(color=True, align=True)))
+    print(C(' ').join(
+        C('\nFound', 'cyan'),
+        colr_num(total, style='bright'),
+        C('{}.'.format('entry' if total == 1 else 'entries'), 'cyan'),
+    ))
+    return 0
 
 
 def show_package_info(packagename):
@@ -517,12 +578,14 @@ def show_package_info(packagename):
         pypiinfo = get_pypi_info(packagename)
     except (HTTPError, UnicodeDecodeError, ValueError) as ex:
         print_err(
-            'Failed to get pypi info for: {}\n{}'.format(packagename, ex)
+            'Failed to get pypi info for',
+            value=packagename,
+            error=ex,
         )
         return 1
     info = pypiinfo.get('info', {})
     if not info:
-        print_err('No info for package: {}'.format(packagename))
+        print_err('No info for package', packagename)
         return 1
     releases = pypiinfo.get('releases', [])
     otherreleasecnt = len(releases) - 1
@@ -873,7 +936,7 @@ class RequirementPlus(Requirement):
         if location:
             s = ' '.join((
                 s,
-                self.location(color=color, default='Not Installed'),
+                self.location(color=color, default='(not installed)'),
             ))
         return s
 
@@ -969,15 +1032,20 @@ class Requirementz(UserList):
             The keyword arguments are passed on to RequirementPlus.to_str().
             Alignment/justification is calculated before iterating.
         """
-        max_name = len(max(self, key=lambda req: len(req.name)).name)
-        max_ver = len(
-            max(self, key=lambda req: len(req.spec_string(color=False)))
-            .spec_string(color=False)
-        )
-        for req in sorted(self, key=lambda req: req.name):
-            req.name_width = max_name
-            req.ver_width = max_ver
-            yield req.to_str(color=color, align=align, location=location)
+        try:
+            max_name = len(max(self, key=lambda req: len(req.name)).name)
+            max_ver = len(
+                max(self, key=lambda req: len(req.spec_string(color=False)))
+                .spec_string(color=False)
+            )
+        except ValueError:
+            # No requirements to iterate over.
+            pass
+        else:
+            for req in sorted(self, key=lambda req: req.name):
+                req.name_width = max_name
+                req.ver_width = max_ver
+                yield req.to_str(color=color, align=align, location=location)
 
     def names(self):
         """ Return a tuple of names only from these RequirementPluses. """
@@ -1038,7 +1106,7 @@ class SafeWriter(object):
             self.file_backup_remove()
             return False
         if self.backup:
-            print_err('A backup file was saved: {}'.format(self.backup))
+            print_err('A backup file was saved', self.backup)
             return False
         print_err('No backup was saved!')
         return False
@@ -1170,7 +1238,7 @@ class StatusLine(object):
         if location:
             return ' '.join((
                 statusstr,
-                self.location(color=color, default='Not Installed')
+                self.location(color=color, default='(not installed)')
             ))
         return statusstr
 
@@ -1185,28 +1253,36 @@ class StatusLine(object):
             return self.status_latest
 
         # Grab pypi info from python.org.
-        pypiinfo = get_pypi_info(self.req.name)
-
-        latest = pypiinfo.get('info', {}).get('version', None)
-        if latest is None:
-            print_err('No version info found for: {name}'.format(
-                name=self.req.name
-            ))
-            return self.status
-        self.pypi_info = pypiinfo
-
-        if self.req.satisfied(against=latest):
-            reqver = self.req.specs[0][1]
-            if reqver == latest:
-                markerstr = ' '
-                latest_color = 'green'
-            else:
-                markerstr = C('-', 'yellow', style='bright')
-                latest_color = 'yellow'
+        try:
+            pypiinfo = get_pypi_info(self.req.name)
+        except HTTPError as exhttp:
+            if exhttp.code != 404:
+                # A real error occurred.
+                raise
+            # Package not found on pypi.
+            latest_color = LIGHTRED
+            markerstr = C('?', 'magenta', style='bright')
+            verstr = C('not found', latest_color)
         else:
-            latest_color = 'red'
-            markerstr = C('!', 'red', style='bright')
+            latest = pypiinfo.get('info', {}).get('version', None)
+            if latest is None:
+                print_err('No version info found for', value=self.req.name)
+                return self.status
+            self.pypi_info = pypiinfo
 
+            if self.req.satisfied(against=latest):
+                reqver = self.req.specs[0][1]
+                if reqver == latest:
+                    markerstr = ' '
+                    latest_color = 'green'
+                else:
+                    markerstr = C('-', 'yellow', style='bright')
+                    latest_color = 'yellow'
+            else:
+                latest_color = 'red'
+                markerstr = C('!', 'red', style='bright')
+
+            verstr = C(self.pypi_info['info']['version'], fore=latest_color)
         latest_colr = C('{} {}').format(
             # Location will be appended after the pypi info.
             self.status(color=color, location=False),
@@ -1214,14 +1290,14 @@ class StatusLine(object):
                 '{} {}: {:<10}'.format(
                     markerstr,
                     C('pypi', LIGHTPURPLE),
-                    C(self.pypi_info['info']['version'], fore=latest_color),
+                    verstr,
                 )
             )
         )
         if location:
             latest_colr = C(' ').join((
                 latest_colr,
-                self.location(color=True, default='Not Installed'),
+                self.location(color=True, default='(not installed)'),
             ))
         if color:
             self.status_latest = str(latest_colr)
@@ -1233,9 +1309,17 @@ class StatusLine(object):
         if location:
             return C(' ').join(
                 self.status(color=color),
-                self.location(color=color, default='Not Installed')
+                self.location(color=color, default='(not installed)')
             )
         return self.status(color=color)
+
+
+class UserCancelled(KeyboardInterrupt):
+    def __init__(self, msg=None):
+        self.msg = str(msg or 'User cancelled.')
+
+    def __str__(self):
+        return self.msg
 
 
 # Global {package_name: package} dict.
@@ -1245,6 +1329,11 @@ PKGS = load_packages()
 if __name__ == '__main__':
     try:
         mainret = main(docopt(USAGESTR, version=VERSIONSTR, script=SCRIPT))
+    except (KeyboardInterrupt, UserCancelled) as ex:
+        if not isinstance(ex, UserCancelled):
+            ex = UserCancelled()
+        print_err('\n{}'.format(ex))
+        mainret = 2
     except (FatalError, HTTPError, UnicodeDecodeError, ValueError) as ex:
         if DEBUG:
             print_err('\n{}\n'.format(traceback.format_exc()))
