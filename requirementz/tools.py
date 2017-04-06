@@ -25,7 +25,7 @@ debugprinter = DebugColrPrinter()
 debugprinter.disable()
 debug = debugprinter.debug
 
-__version__ = '0.3.2'
+__version__ = '0.3.3'
 
 # Operates on ./requirements.txt by default.
 DEFAULT_FILE = 'requirements.txt'
@@ -106,6 +106,7 @@ def format_env_err(**kwargs):
 
 def get_pypi_info(packagename):
     url = 'https://pypi.python.org/pypi/{}/json'.format(packagename)
+    debug('Getting info for \'{}\' from: {}'.format(packagename, url))
     try:
         con = urlopen(url)
     except HTTPError as excon:

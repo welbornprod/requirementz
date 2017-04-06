@@ -43,6 +43,7 @@ from .tools import (
     FatalError,
     format_env_err,
     get_pypi_info,
+    parse_version,
     PKGS,
     print_err,
     RequirementPlus,
@@ -523,7 +524,7 @@ def show_package_info(packagename):
                 homepage=homepagestr,
             )
         ))
-    latestrelease = sorted(releases)[-1] if releases else None
+    latestrelease = max(releases, key=parse_version) if releases else None
     if latestrelease:
         try:
             latestdls = releases[latestrelease][0].get('downloads', 0)
@@ -546,6 +547,21 @@ def show_package_info(packagename):
             ).join('(', ')'),
         )
 
+        # Show the version that is isntalled, if any.
+        installedver = pkg_installed_version(packagename)
+        if installedver is None:
+            installedstr = C('not installed', 'red').join('(', ')')
+        elif installedver == latestrelease:
+            installedstr = C('installed', 'green').join('(', ')')
+        else:
+            installedstr = C(': ').join(
+                C('installed', label_color),
+                C(installedver, value_color),
+            ).join('(', ')')
+        lateststr = C(' ').join(
+            lateststr,
+            installedstr,
+        )
         pkgstr = '\n'.join((
             pkgstr,
             '    {latest}'.format(

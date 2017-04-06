@@ -1,4 +1,4 @@
-colr >= 0.7.6
+colr >= 0.8.1
 docopt >= 0.6.2
 formatblock >= 0.3.6
 printdebug >= 0.3.0
