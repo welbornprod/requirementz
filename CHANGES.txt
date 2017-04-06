@@ -1,3 +1,4 @@
+v0.3.3 04/05/17 -- More info for pypi checks.
 v0.3.2 03/05/17 -- Bump version for pypi doc changes.
 v0.3.1 03/05/17 -- Better docs.
 v0.3.0 03/05/17 -- First public release.
