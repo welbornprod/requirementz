@@ -39,7 +39,7 @@ TEST_LINES = (
 TEST_FILE = 'test_requirements.txt'
 
 HAS_CONNECTION = False
-CONNECTION_SITES = ('https://welbornprod.com', 'https://google.com')
+CONNECTION_SITES = ('https://github.com', 'https://google.com')
 for url in CONNECTION_SITES:
     try:
         # Try connecting to a site, to test internet connection.
@@ -50,7 +50,10 @@ for url in CONNECTION_SITES:
         HAS_CONNECTION = True
         break
     finally:
-        con.close()
+        try:
+            con.close()
+        except NameError:
+            pass
 
 
 class RequirementzTests(unittest.TestCase):

@@ -6,7 +6,6 @@
 
 import json
 import os
-import pip
 import re
 import shutil
 import sys
@@ -19,13 +18,18 @@ from urllib.request import urlopen
 
 from requirements.requirement import Requirement
 
+try:
+    from pip import get_installed_distributions
+except ImportError:
+    from pip._internal.utils.misc import get_installed_distributions
+
 from colr import Colr as C
 from printdebug import DebugColrPrinter
 debugprinter = DebugColrPrinter()
 debugprinter.disable()
 debug = debugprinter.debug
 
-__version__ = '0.3.3'
+__version__ = '0.3.4'
 
 # Operates on ./requirements.txt by default.
 DEFAULT_FILE = 'requirements.txt'
@@ -161,12 +165,15 @@ def load_packages(local_only=False):
         # Map from package name to pip package.
         pkgs = {
             p.project_name.lower(): p
-            for p in pip.get_installed_distributions(local_only=local_only)
+            for p in get_installed_distributions(
+                local_only=local_only
+            )
         }
     except Exception as ex:
         raise FatalError(
             'Unable to retrieve packages with pip: {}'.format(ex)
         )
+
     debug('Packages loaded: {}'.format(len(pkgs)))
     return pkgs
 

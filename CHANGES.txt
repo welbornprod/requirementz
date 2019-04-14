@@ -1,3 +1,4 @@
+v0.3.4 04/14/19 -- Bugfix for get_installed_distributions, python 3.6+.
 v0.3.3 04/05/17 -- More info for pypi checks.
 v0.3.2 03/05/17 -- Bump version for pypi doc changes.
 v0.3.1 03/05/17 -- Better docs.
