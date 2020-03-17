@@ -210,7 +210,7 @@ def sort_requirements(filename=DEFAULT_FILE):
     """ Sort a requirements file, and re-write it. """
     reqs = Requirementz.from_file(filename=filename)
     reqs.write(filename=filename)
-    return 0
+    return 0 if reqs else 1
 
 
 class FatalError(EnvironmentError):
@@ -532,7 +532,10 @@ class Requirementz(UserList):
     def from_lines(cls, lines):
         """ Instantiate a Requirementz from a list of requirements.txt lines.
         """
-        return cls(RequirementPlus.parse(l) for l in sorted(lines))
+        return cls(
+            RequirementPlus.parse(l)
+            for l in sorted(lines) if l.strip()
+        )
 
     def get_byname(self, name):
         """ Return the first RequirementPlus found by name.

@@ -159,8 +159,10 @@ def main(argd):
     elif argd['--pypi']:
         return show_package_infos(get_requirement_names(filename))
     elif argd['--sort']:
-        sort_requirements(filename)
-        print('Sorted requirements file: {}'.format(filename))
+        if sort_requirements(filename) == 0:
+            print('Sorted requirements file: {}'.format(filename))
+        else:
+            print('Requirements file is empty.')
         return 0
     elif argd['PACKAGE']:
         return show_package_infos(argd['PACKAGE'])
@@ -187,7 +189,7 @@ def add_lines(filename, lines):
     for line in lines:
         try:
             req = RequirementPlus.parse(line)
-        except ValueError as ex:
+        except ValueError:
             print_err('Invalid requirement spec.', value=line)
             return 1
 
@@ -224,7 +226,7 @@ def check_requirements(
     reqs = Requirementz.from_file(filename=filename)
     if len(reqs) == 0:
         print('Requirements file is empty.')
-        return 1
+        return 0
     errs = 0
     for r in reqs:
         statusline = StatusLine(r)
@@ -576,6 +578,9 @@ def show_package_infos(packagenames):
     """ Show local and pypi info for a list of package names.
         Returns 0 on success, otherwise returns the number of errors.
     """
+    if not packagenames:
+        print('Requirements file is empty.')
+        return 0
     return sum(show_package_info(name) for name in packagenames)
 
 
