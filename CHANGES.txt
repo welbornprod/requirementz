@@ -1,3 +1,4 @@
+v0.3.5 03/17/20 -- Empty files are not an error.
 v0.3.4 04/14/19 -- Bugfix for get_installed_distributions, python 3.6+.
 v0.3.3 04/05/17 -- More info for pypi checks.
 v0.3.2 03/05/17 -- Bump version for pypi doc changes.
