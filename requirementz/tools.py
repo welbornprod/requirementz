@@ -29,7 +29,7 @@ debugprinter = DebugColrPrinter()
 debugprinter.disable()
 debug = debugprinter.debug
 
-__version__ = '0.3.4'
+__version__ = '0.3.5'
 
 # Operates on ./requirements.txt by default.
 DEFAULT_FILE = 'requirements.txt'
@@ -207,10 +207,26 @@ def print_err(*args, **kwargs):
 
 
 def sort_requirements(filename=DEFAULT_FILE):
-    """ Sort a requirements file, and re-write it. """
+    """ Sort a requirements file, and re-write it.
+        Raises EmptyFile() for empty requirements files.
+    """
     reqs = Requirementz.from_file(filename=filename)
+    if len(reqs) == 0:
+        raise EmptyFile()
     reqs.write(filename=filename)
-    return 0 if reqs else 1
+    return True
+
+
+class EmptyFile(ValueError):
+    """ Raised for empty files, though it is not actually an error.
+        It means that no operation can be performed on the file,
+        but the file itself is not an error.
+    """
+    def __repr__(self):
+        return ''.join((type(self).__name__, '()'))
+
+    def __str__(self):
+        return 'Requirements file is empty.'
 
 
 class FatalError(EnvironmentError):

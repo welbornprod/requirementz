@@ -40,6 +40,7 @@ from .tools import (
     debug,
     debugprinter,
     DEFAULT_FILE,
+    EmptyFile,
     FatalError,
     format_env_err,
     get_pypi_info,
@@ -159,10 +160,8 @@ def main(argd):
     elif argd['--pypi']:
         return show_package_infos(get_requirement_names(filename))
     elif argd['--sort']:
-        if sort_requirements(filename) == 0:
+        if sort_requirements(filename):
             print('Sorted requirements file: {}'.format(filename))
-        else:
-            print('Requirements file is empty.')
         return 0
     elif argd['PACKAGE']:
         return show_package_infos(argd['PACKAGE'])
@@ -225,8 +224,7 @@ def check_requirements(
     """
     reqs = Requirementz.from_file(filename=filename)
     if len(reqs) == 0:
-        print('Requirements file is empty.')
-        return 0
+        raise EmptyFile()
     errs = 0
     for r in reqs:
         statusline = StatusLine(r)
@@ -275,6 +273,11 @@ def entry_point():
     """
     try:
         mainret = main(docopt(USAGESTR, version=VERSIONSTR, script=SCRIPT))
+    except EmptyFile as ex:
+        # This is actually not an error.
+        # There's just nothing to do with an empty file.
+        print_err(str(ex))
+        mainret = 0
     except (KeyboardInterrupt, UserCancelled) as ex:
         if not isinstance(ex, UserCancelled):
             ex = UserCancelled()
@@ -297,7 +300,7 @@ def entry_point():
 
 
 def file_ensure_exists(filename):
-    """ Confirm that a requirements.txt exists, create one if the USAGESTR
+    """ Confirm that a requirements.txt exists, create one if the user
         wants to. If none exists, and the user does not want to create one,
         return False.
         Returns True on success.
@@ -579,8 +582,7 @@ def show_package_infos(packagenames):
         Returns 0 on success, otherwise returns the number of errors.
     """
     if not packagenames:
-        print('Requirements file is empty.')
-        return 0
+        raise EmptyFile()
     return sum(show_package_info(name) for name in packagenames)
 
 
